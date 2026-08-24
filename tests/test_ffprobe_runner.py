@@ -14,7 +14,7 @@ def test_runner_builds_ffprobe_command_and_decodes_json(monkeypatch: MonkeyPatch
     ) -> subprocess.CompletedProcess[str]:
         assert command[0] == "custom-ffprobe"
         assert command[-1] == "movie.mp4"
-        assert "stream_tags=rotate" in command
+        assert any("stream_tags=rotate" in argument for argument in command)
         assert check is True
         assert capture_output is True
         assert text is True

@@ -26,9 +26,11 @@ class SubprocessFFprobeRunner:
             "-select_streams",
             "v:0",
             "-show_entries",
-            "stream=codec_type,codec_name,width,height,avg_frame_rate,nb_frames,bit_rate:"
-            "stream_tags=rotate:stream_side_data=rotation:format=duration,bit_rate:"
-            "format_tags=creation_time",
+            (
+                "stream=codec_type,codec_name,width,height,avg_frame_rate,nb_frames,bit_rate:"
+                "stream_tags=rotate:stream_side_data=rotation:format=duration,bit_rate:"
+                "format_tags=creation_time"
+            ),
             "-of",
             "json",
             str(video_path),

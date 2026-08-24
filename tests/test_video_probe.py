@@ -1,7 +1,7 @@
 """Tests unitaires de l'interprétation des réponses ffprobe."""
 
 from collections.abc import Mapping
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -53,7 +53,7 @@ def test_inspect_parses_simulated_ffprobe_response() -> None:
     assert info.duration_seconds == pytest.approx(10.01)
     assert info.bitrate == 8_000_000
     assert info.orientation_degrees == 270
-    assert info.creation_time == datetime(2024, 6, 1, 12, 30, tzinfo=timezone.utc)
+    assert info.creation_time == datetime(2024, 6, 1, 12, 30, tzinfo=UTC)
 
 
 def test_inspect_estimates_frame_count_and_uses_format_bitrate() -> None:

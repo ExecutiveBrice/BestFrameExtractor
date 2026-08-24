@@ -14,3 +14,7 @@ scene_detection:
   min_scene_len_frames: 15
   window_width: 2
   min_content_val: 15.0
+
+candidate_extraction:
+  fps: 3
+  analysis_max_width: 960

@@ -4,7 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from bestshot.infrastructure.config import ConfigurationError, load_scene_detector_settings
+from bestshot.infrastructure.config import (
+    ConfigurationError,
+    load_candidate_extraction_settings,
+    load_scene_detector_settings,
+)
 
 
 def test_load_scene_detector_settings_reads_yaml(tmp_path: Path) -> None:
@@ -33,3 +37,19 @@ def test_load_scene_detector_settings_rejects_missing_section(tmp_path: Path) ->
 
     with pytest.raises(ConfigurationError, match="scene_detection"):
         load_scene_detector_settings(config_path)
+
+
+def test_load_candidate_extraction_settings_reads_yaml(tmp_path: Path) -> None:
+    config_path = tmp_path / "settings.yaml"
+    config_path.write_text(
+        """candidate_extraction:
+  fps: 4
+  analysis_max_width: 720
+""",
+        encoding="utf-8",
+    )
+
+    settings = load_candidate_extraction_settings(config_path)
+
+    assert settings.fps == 4.0
+    assert settings.analysis_max_width == 720

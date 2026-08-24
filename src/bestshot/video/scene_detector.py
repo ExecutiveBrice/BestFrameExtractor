@@ -41,7 +41,11 @@ class PySceneDetectBackend:
     ) -> Sequence[tuple[float, float]]:
         """Détecte les scènes en parcourant le flux vidéo séquentiellement."""
         try:
-            from scenedetect import AdaptiveDetector, SceneManager, open_video
+            from scenedetect import (  # type: ignore[import-untyped]
+                AdaptiveDetector,
+                SceneManager,
+                open_video,
+            )
         except ImportError as error:
             raise SceneDetectionError("PySceneDetect n'est pas installé.") from error
 

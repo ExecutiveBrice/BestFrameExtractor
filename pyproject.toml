@@ -14,13 +14,20 @@ dependencies = [
     "av>=12.0",
     "opencv-python-headless>=4.10",
     "Pillow>=10.0",
-    "PySceneDetect>=0.6",
+    "scenedetect>=0.6",
     "PyYAML>=6.0",
     "typer>=0.12",
 ]
 
 [project.scripts]
 bestshot = "bestshot.cli:app"
+
+[project.optional-dependencies]
+dev = [
+    "mypy>=1.10",
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/bestshot"]
@@ -41,10 +48,3 @@ target-version = "py312"
 python_version = "3.12"
 strict = true
 packages = ["bestshot"]
-
-[dependency-groups]
-dev = [
-    "mypy>=1.10",
-    "pytest>=8.0",
-    "ruff>=0.5",
-]

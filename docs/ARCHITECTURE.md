@@ -54,6 +54,20 @@ extraite ni fichier intermédiaire. Les réglages `adaptive_threshold`,
 `config/default.yaml`, puis validés par `infrastructure.config` avant usage. La
 commande `bestshot scenes VIDEO` affiche simplement les scènes ainsi détectées.
 
+## Génération des candidates
+
+`domain.candidate_frame.CandidateFrame` préserve l'identifiant de scène, le timestamp,
+le numéro de frame décodée, les dimensions source et un `PreviewImage` RGB. Cet aperçu
+est un buffer mémoire redimensionné pour l'analyse : aucune image haute résolution
+n'est exportée à cette étape.
+
+`PyAVCandidateFrameBackend` décode une frame à la fois, dans l'ordre temporel, puis
+la réduit à `analysis_max_width` avant de la céder au générateur. `CandidateExtractor`
+échantillonne les scènes à la cadence `fps`. Les candidates sont exposées par un
+itérateur et ne sont donc pas accumulées : la commande `bestshot candidates VIDEO`
+ne conserve que les compteurs par scène. Les paramètres par défaut sont définis dans
+la section `candidate_extraction` de `config/default.yaml` (3 images/s, largeur 960 px).
+
 ## Configuration
 
 La configuration par défaut est `config/default.yaml`. Elle est lue par un adaptateur
