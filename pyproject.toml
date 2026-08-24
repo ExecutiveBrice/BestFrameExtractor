@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "bestshotai"
+version = "0.1.0"
+description = "Extraction locale des meilleures images fixes depuis des vidéos familiales."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "BestShotAI contributors" }]
+dependencies = [
+    "av>=12.0",
+    "opencv-python-headless>=4.10",
+    "Pillow>=10.0",
+    "PySceneDetect>=0.6",
+    "PyYAML>=6.0",
+    "typer>=0.12",
+]
+
+[project.scripts]
+bestshot = "bestshot.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bestshot"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra"
+markers = [
+    "integration: test nécessitant des exécutables ou fichiers réels.",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["bestshot"]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.10",
+    "pytest>=8.0",
+    "ruff>=0.5",
+]

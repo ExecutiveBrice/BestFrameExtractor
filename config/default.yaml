@@ -1,0 +1,16 @@
+# Configuration par défaut de BestShotAI.
+# Les valeurs de sélection seront ajoutées avec les algorithmes d'analyse.
+processing:
+  local_only: true
+  max_frames_in_memory: 1
+
+video:
+  ffmpeg_binary: ffmpeg
+  ffprobe_binary: ffprobe
+
+scene_detection:
+  # AdaptiveDetector est adapté aux vidéos avec mouvements de caméra fréquents.
+  adaptive_threshold: 3.0
+  min_scene_len_frames: 15
+  window_width: 2
+  min_content_val: 15.0
