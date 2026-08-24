@@ -1,0 +1,1 @@
+"""Plugins optionnels exécutés localement."""

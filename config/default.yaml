@@ -18,3 +18,87 @@ scene_detection:
 candidate_extraction:
   fps: 3
   analysis_max_width: 960
+
+technical_scoring:
+  sharpness_min_variance: 15.0
+  sharpness_good_variance: 200.0
+  exposure_target: 0.5
+  exposure_max_deviation: 0.35
+  burned_pixel_threshold: 0.98
+  burned_pixels_max_fraction: 0.02
+  underexposed_pixel_threshold: 0.05
+  underexposed_pixels_max_fraction: 0.10
+  contrast_min_stddev: 0.04
+  contrast_good_stddev: 0.20
+  motion_blur_min_gradient: 0.01
+  motion_blur_max_anisotropy: 0.60
+  weights:
+    sharpness: 1.0
+    exposure: 1.0
+    burned_pixels: 1.0
+    underexposed_pixels: 1.0
+    contrast: 1.0
+    motion_blur: 1.0
+
+face_scoring:
+  # Modèle Face Landmarker téléchargé et conservé localement.
+  model_path: models/face_landmarker.task
+  max_faces: 10
+  min_face_detection_confidence: 0.5
+  min_face_presence_confidence: 0.5
+  min_tracking_confidence: 0.5
+  yaw_scale_degrees: 45.0
+  face_cut_off_margin: 0.02
+  size_min_relative_area: 0.02
+  size_good_relative_area: 0.12
+  max_yaw_degrees: 35.0
+  sharpness_min_variance: 15.0
+  sharpness_good_variance: 200.0
+  weights:
+    detection_confidence: 1.0
+    size: 1.0
+    orientation: 1.0
+    eyes_open: 1.5
+    positive_expression: 0.5
+    sharpness: 1.5
+    crop: 1.5
+
+composite_scoring:
+  # Valeur neutre utilisée jusqu'à l'implémentation des scorers esthétique/composition.
+  neutral_score: 0.5
+  people:
+    technical: 0.30
+    face: 0.40
+    aesthetic: 0.20
+    composition: 0.10
+  no_people:
+    technical: 0.40
+    aesthetic: 0.35
+    composition: 0.25
+
+refinement:
+  enabled: true
+  window_ms: 500
+  candidates_per_scene: 3
+
+deduplication:
+  similarity_threshold: 0.90
+  temporal_window_ms: 1000
+  hash_size: 8
+
+selection:
+  max_per_scene: 3
+  minimum_score: 0.55
+
+export:
+  # Échelle q:v de FFmpeg : 2 est une haute qualité JPEG.
+  jpeg_quality: 2
+
+aesthetic_model:
+  clip_repo_id: openai/clip-vit-large-patch14
+  predictor_repo_id: shunk031/aesthetic-predictor-v2-sac-logos-ava1-l14-linearMSE
+  predictor_filename: aesthetic-model.pth
+  cache_dir: .bestshot/models/aesthetic
+  embedding_dimension: 768
+  raw_score_min: 1.0
+  raw_score_max: 10.0

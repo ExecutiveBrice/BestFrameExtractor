@@ -61,10 +61,18 @@ class PySceneDetectBackend:
                 )
             )
             scene_manager.detect_scenes(video)
-            return [
+            scenes = [
                 (float(start_time.get_seconds()), float(end_time.get_seconds()))
                 for start_time, end_time in scene_manager.get_scene_list()
             ]
+            if scenes:
+                return scenes
+            duration = getattr(video, "duration", None)
+            if duration is not None:
+                duration_seconds = float(duration.get_seconds())
+                if duration_seconds > 0:
+                    return [(0.0, duration_seconds)]
+            return []
         except Exception as error:
             raise SceneDetectionError(f"Impossible de détecter les scènes : {error}") from error
 

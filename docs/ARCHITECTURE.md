@@ -52,7 +52,9 @@ de caméra sont fréquents. Il analyse le flux séquentiellement et ne produit n
 extraite ni fichier intermédiaire. Les réglages `adaptive_threshold`,
 `min_scene_len_frames`, `window_width` et `min_content_val` sont définis dans
 `config/default.yaml`, puis validés par `infrastructure.config` avant usage. La
-commande `bestshot scenes VIDEO` affiche simplement les scènes ainsi détectées.
+commande `bestshot scenes VIDEO` affiche simplement les scènes ainsi détectées. Si
+PySceneDetect ne détecte aucune coupe, l'adaptateur retourne la durée complète comme
+une scène unique : les étapes suivantes restent donc utilisables pour toute vidéo.
 
 ## Génération des candidates
 
@@ -67,6 +69,89 @@ la réduit à `analysis_max_width` avant de la céder au générateur. `Candidat
 itérateur et ne sont donc pas accumulées : la commande `bestshot candidates VIDEO`
 ne conserve que les compteurs par scène. Les paramètres par défaut sont définis dans
 la section `candidate_extraction` de `config/default.yaml` (3 images/s, largeur 960 px).
+
+## Score technique
+
+`domain.technical_score.TechnicalScore` porte six qualités normalisées de `0` à `1`
+(`1` est favorable) et leur moyenne pondérée : netteté, exposition, pixels brûlés,
+pixels sous-exposés, contraste et faible flou de mouvement. Le module
+`scoring.technical.TechnicalScorer` ne reçoit que `PreviewImage`, jamais l'image source
+haute résolution. Il utilise la variance du Laplacien pour la netteté, la luminance
+pour l'exposition et les pixels extrêmes, l'écart-type pour le contraste et une
+heuristique d'anisotropie des gradients pour le flou de mouvement.
+
+Tous les seuils et poids sont définis dans `technical_scoring` de `config/default.yaml`.
+`bestshot analyse VIDEO --technical-only` traite les candidates en flux et affiche le
+score technique moyen de chaque scène, sans conserver les aperçus après calcul.
+
+## Score de visages
+
+`scoring.face.MediaPipeFaceLandmarkerBackend` utilise le modèle local MediaPipe Face
+Landmarker indiqué par `face_scoring.model_path`. Il ne réalise aucune reconnaissance
+faciale : aucune identité, empreinte biométrique ou association entre images n'est
+produite ni stockée. Pour chaque visage, `FaceAnalysis` contient seulement des mesures
+de qualité (taille relative, yaw approximatif, ouverture des yeux, sourire, netteté et
+coupe). `FaceScore` agrège le groupe en pénalisant la valeur la moins favorable pour
+les yeux fermés, les visages tournés, flous ou coupés. L'absence de visage renvoie un
+score global `None` et n'est pas un échec ni une mauvaise photo.
+
+Les poids et tous les seuils sont configurables dans `face_scoring` de
+`config/default.yaml`. Le modèle `.task` reste local. Si ce fichier est absent,
+`create_face_scorer` fournit un score sans visage neutre afin que la sélection et
+l'export restent possibles ; lorsqu'il est présent, le backend MediaPipe est utilisé.
+
+## Score composite
+
+`scoring.composite.CompositeScorer` combine les objets complets `TechnicalScore`,
+`FaceScore` et les futurs scores esthétique et composition. Il sélectionne le profil
+`people` dès qu'au moins un visage a un score, sinon `no_people`. Les valeurs et poids
+de ces profils sont configurables dans `composite_scoring` de `config/default.yaml`.
+
+`AestheticScorer` et `CompositionScorer` sont déjà des interfaces. En leur absence,
+leurs implémentations neutres exposent explicitement une valeur neutre configurable :
+elles préservent les poids sans simuler un score calculé. Le résultat `CompositeScore`
+inclut toujours les objets de score détaillés, le profil retenu et une liste triée de
+`CompositeReason` (score, poids, contribution et origine), jamais un simple flottant.
+
+## Raffinement de candidates
+
+`video.candidate_refiner.CandidateRefiner` prend les meilleures `RankedCandidate` de
+chaque scène, limitées par `refinement.candidates_per_scene`, puis examine les frames
+originales dans une fenêtre de ± `refinement.window_ms`. Le décodeur PyAV reste
+séquentiel et le raffineur calcule au plus une fois les scores technique, visage et
+composite pour chaque `frame_index`, même si plusieurs fenêtres se chevauchent.
+
+La frame sélectionnée est rendue comme `RefinedCandidate` avec ses scores complets et
+un aperçu réduit. Aucune frame haute résolution n'est exportée. `refinement.enabled`
+permet de désactiver entièrement ce second passage.
+
+## Dédoublonnage
+
+`selection.deduplicate.Deduplicator` trie les `RankedCandidate` par score composite,
+puis compare une candidate aux candidates déjà retenues seulement dans la fenêtre
+`deduplication.temporal_window_ms`. La première implémentation
+`PerceptualHashSimilarityScorer` emploie un hash perceptuel DCT sur les aperçus réduits
+et conserve la mieux classée lorsqu'une similarité dépasse
+`deduplication.similarity_threshold`.
+
+Le résultat `DeduplicationResult` sépare les candidates retenues des `DuplicateCandidate`
+avec la candidate gagnante, la similarité et l'écart temporel. `SimilarityScorer` est
+un port : un score par embeddings peut le remplacer sans modifier la sélection.
+
+## Sélection finale
+
+`BestFrameSelector` reçoit les candidates classées, les scènes et le résultat de
+dédoublonnage. Il applique `selection.minimum_score`, limite chaque scène par
+`selection.max_per_scene`, puis sélectionne par tours entre les scènes pour préserver
+la diversité temporelle. Les candidates sous le seuil ne servent jamais à remplir un
+quota. `SelectionResult` contient les frames retenues, les doublons et chaque rejet.
+
+## Export final
+
+`FinalExporter` envoie chaque timestamp retenu à FFmpeg pour extraire directement une
+frame de la vidéo originale, sans jamais agrandir les previews d'analyse. Il produit
+des JPEG configurables ou des PNG, ainsi qu'un `manifest.json` contenant source,
+timestamp, index de frame, scène et détails des scores.
 
 ## Configuration
 

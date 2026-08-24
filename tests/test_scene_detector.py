@@ -88,3 +88,38 @@ def test_pyscenedetect_backend_uses_adaptive_detector(monkeypatch: MonkeyPatch) 
         "min_content_val": 12.0,
     }
     assert captured["video"] == "video:family.mp4"
+
+
+def test_pyscenedetect_backend_uses_whole_video_when_no_cut_is_detected(
+    monkeypatch: MonkeyPatch,
+) -> None:
+    class FakeTimecode:
+        def get_seconds(self) -> float:
+            return 4.0
+
+    class FakeVideo:
+        duration = FakeTimecode()
+
+    class FakeAdaptiveDetector:
+        def __init__(self, **parameters: object) -> None:
+            del parameters
+
+    class FakeSceneManager:
+        def add_detector(self, detector: FakeAdaptiveDetector) -> None:
+            del detector
+
+        def detect_scenes(self, video: FakeVideo) -> None:
+            del video
+
+        def get_scene_list(self) -> list[tuple[FakeTimecode, FakeTimecode]]:
+            return []
+
+    fake_module = ModuleType("scenedetect")
+    fake_module.AdaptiveDetector = FakeAdaptiveDetector
+    fake_module.SceneManager = FakeSceneManager
+    fake_module.open_video = lambda path: FakeVideo()
+    monkeypatch.setitem(sys.modules, "scenedetect", fake_module)
+
+    assert PySceneDetectBackend().detect(Path("family.mp4"), SceneDetectorSettings(3.0, 15, 2, 15.0)) == [
+        (0.0, 4.0)
+    ]

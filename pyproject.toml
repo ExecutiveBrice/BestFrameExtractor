@@ -12,6 +12,8 @@ license = { text = "MIT" }
 authors = [{ name = "BestShotAI contributors" }]
 dependencies = [
     "av>=12.0",
+    "mediapipe>=0.10",
+    "numpy>=2.0",
     "opencv-python-headless>=4.10",
     "Pillow>=10.0",
     "scenedetect>=0.6",
@@ -23,6 +25,11 @@ dependencies = [
 bestshot = "bestshot.cli:app"
 
 [project.optional-dependencies]
+aesthetic = [
+    "huggingface-hub>=0.24",
+    "torch>=2.3",
+    "transformers>=4.44",
+]
 dev = [
     "mypy>=1.10",
     "pytest>=8.0",
@@ -48,3 +55,11 @@ target-version = "py312"
 python_version = "3.12"
 strict = true
 packages = ["bestshot"]
+
+[[tool.mypy.overrides]]
+module = ["mediapipe", "mediapipe.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["huggingface_hub", "torch", "transformers"]
+ignore_missing_imports = true
