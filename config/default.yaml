@@ -18,6 +18,8 @@ scene_detection:
 candidate_extraction:
   fps: 3
   analysis_max_width: 960
+  # Dépôt local réservé aux aperçus de candidates, jamais aux frames natives.
+  candidate_repository_dir: .bestshot/candidates
 
 technical_scoring:
   sharpness_min_variance: 15.0
@@ -95,10 +97,12 @@ export:
   jpeg_quality: 2
 
 aesthetic_model:
-  clip_repo_id: openai/clip-vit-large-patch14
-  predictor_repo_id: shunk031/aesthetic-predictor-v2-sac-logos-ava1-l14-linearMSE
-  predictor_filename: aesthetic-model.pth
+  # Nom de la variable d'environnement contenant le jeton Hugging Face.
+  # Ne jamais inscrire le jeton lui-même dans ce fichier.
+  huggingface_token_env: HUGGINGFACE_TOKEN
+  clip_repo_id: openai/clip-vit-base-patch32
+  model_repo_id: rsinema/aesthetic-scorer
+  model_filename: model.pt
   cache_dir: .bestshot/models/aesthetic
-  embedding_dimension: 768
-  raw_score_min: 1.0
-  raw_score_max: 10.0
+  raw_score_min: 0.0
+  raw_score_max: 5.0

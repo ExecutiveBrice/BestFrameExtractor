@@ -1,5 +1,9 @@
 """Adaptateurs aux fichiers et aux bibliothèques externes."""
 
+from bestshot.infrastructure.candidate_repository import (
+    CandidateRepositoryError,
+    LocalCandidatePreviewRepository,
+)
 from bestshot.infrastructure.config import (
     DEFAULT_CONFIG_PATH,
     load_candidate_extraction_settings,
@@ -17,8 +21,10 @@ from bestshot.infrastructure.ffprobe import SubprocessFFprobeRunner
 
 __all__ = [
     "DEFAULT_CONFIG_PATH",
+    "CandidateRepositoryError",
     "FFmpegExportError",
     "FFmpegFrameExporter",
+    "LocalCandidatePreviewRepository",
     "SubprocessFFprobeRunner",
     "load_candidate_extraction_settings",
     "load_composite_scoring_settings",

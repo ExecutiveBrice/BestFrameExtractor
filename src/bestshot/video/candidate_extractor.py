@@ -17,6 +17,7 @@ class CandidateExtractionSettings:
 
     fps: float
     analysis_max_width: int
+    candidate_repository_dir: Path = Path(".bestshot/candidates")
 
 
 @dataclass(frozen=True, slots=True)

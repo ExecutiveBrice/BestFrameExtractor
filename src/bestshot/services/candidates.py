@@ -6,6 +6,10 @@ from pathlib import Path
 from bestshot.domain.candidate_frame import CandidateFrame
 from bestshot.domain.scene import Scene
 from bestshot.video.candidate_extractor import CandidateExtractor
+from bestshot.video.candidate_repository import (
+    CandidatePreviewRepository,
+    CandidateRepositoryResult,
+)
 
 
 def extract_candidates(
@@ -25,3 +29,25 @@ def format_candidate_counts(scenes: Sequence[Scene], candidates: Iterable[Candid
     return "\n".join(
         f"Scène {scene.index}: {counts[scene.index]} candidate(s)" for scene in scenes
     )
+
+
+def persist_candidate_previews(
+    video_path: Path,
+    candidates: Iterable[CandidateFrame],
+    repository: CandidatePreviewRepository,
+) -> CandidateRepositoryResult:
+    """Persiste les aperçus réduits au fil du décodage dans le dépôt local."""
+    return repository.store(video_path, candidates)
+
+
+def format_candidate_repository_result(
+    scenes: Sequence[Scene], result: CandidateRepositoryResult
+) -> str:
+    """Affiche les compteurs et l'emplacement des aperçus persistés."""
+    lines = [
+        f"Scène {scene.index}: {result.scene_counts.get(scene.index, 0)} candidate(s)"
+        for scene in scenes
+    ]
+    lines.append(f"{result.candidate_count} aperçu(s) enregistré(s) dans {result.output_directory}")
+    lines.append(f"Manifeste : {result.manifest_path}")
+    return "\n".join(lines) if lines else "Aucune scène détectée."

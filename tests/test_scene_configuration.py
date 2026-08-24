@@ -52,6 +52,7 @@ def test_load_candidate_extraction_settings_reads_yaml(tmp_path: Path) -> None:
         """candidate_extraction:
   fps: 4
   analysis_max_width: 720
+  candidate_repository_dir: /tmp/candidates
 """,
         encoding="utf-8",
     )
@@ -60,6 +61,7 @@ def test_load_candidate_extraction_settings_reads_yaml(tmp_path: Path) -> None:
 
     assert settings.fps == 4.0
     assert settings.analysis_max_width == 720
+    assert settings.candidate_repository_dir == Path("/tmp/candidates")
 
 
 def test_load_technical_scoring_settings_reads_yaml(tmp_path: Path) -> None:
@@ -208,3 +210,25 @@ def test_load_export_settings_reads_yaml(tmp_path: Path) -> None:
     config_path.write_text("export:\n  jpeg_quality: 2\n", encoding="utf-8")
 
     assert load_export_settings(config_path).jpeg_quality == 2
+
+
+def test_load_aesthetic_model_settings_reads_huggingface_token_environment_name(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "settings.yaml"
+    config_path.write_text(
+        """aesthetic_model:
+  huggingface_token_env: HF_TOKEN
+  clip_repo_id: openai/clip-vit-base-patch32
+  model_repo_id: example/aesthetic-scorer
+  model_filename: model.pt
+  cache_dir: .bestshot/models/aesthetic
+  raw_score_min: 0.0
+  raw_score_max: 5.0
+""",
+        encoding="utf-8",
+    )
+
+    from bestshot.infrastructure.config import load_aesthetic_model_settings
+
+    assert load_aesthetic_model_settings(config_path).huggingface_token_env == "HF_TOKEN"

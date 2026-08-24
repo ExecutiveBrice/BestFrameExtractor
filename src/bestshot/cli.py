@@ -5,6 +5,10 @@ from typing import Annotated
 
 import typer
 
+from bestshot.infrastructure.candidate_repository import (
+    CandidateRepositoryError,
+    LocalCandidatePreviewRepository,
+)
 from bestshot.infrastructure.config import (
     ConfigurationError,
     load_aesthetic_model_settings,
@@ -27,7 +31,11 @@ from bestshot.selection.deduplicate import Deduplicator, PerceptualHashSimilarit
 from bestshot.selection.exporter import FinalExporter
 from bestshot.selection.selector import BestFrameSelector
 from bestshot.services.aesthetic_analysis import format_aesthetic_analysis
-from bestshot.services.candidates import extract_candidates, format_candidate_counts
+from bestshot.services.candidates import (
+    extract_candidates,
+    format_candidate_repository_result,
+    persist_candidate_previews,
+)
 from bestshot.services.scenes import detect_scenes, format_scenes
 from bestshot.services.selection import format_selection_result, rank_candidates, select_best_frames
 from bestshot.services.technical_analysis import format_technical_analysis
@@ -53,7 +61,7 @@ def models() -> None:
     """Affiche l'état du modèle esthétique local."""
     settings = load_aesthetic_model_settings()
     status = AestheticModelManager().status(settings)
-    typer.echo(f"Aesthetic CLIP: {status.message} ({status.cache_path})")
+    typer.echo(f"Modèle esthétique : {status.message} ({status.cache_path})")
 
 
 @models_app.command("download")
@@ -63,10 +71,10 @@ def download_model(name: str = typer.Argument(...)) -> None:
         raise typer.BadParameter("Seul le modèle aesthetic est disponible.")
     try:
         status = AestheticModelManager().download(load_aesthetic_model_settings())
-    except (ConfigurationError, RuntimeError) as error:
+    except (ConfigurationError, OSError, RuntimeError) as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(code=1) from error
-    typer.echo(f"Aesthetic CLIP: {status.message} ({status.cache_path})")
+    typer.echo(f"Modèle esthétique : {status.message} ({status.cache_path})")
 
 
 @app.command()
@@ -110,17 +118,27 @@ def candidates(
         typer.Argument(..., exists=True, file_okay=True, dir_okay=False, readable=True),
     ],
 ) -> None:
-    """Affiche le nombre de candidates d'analyse créées pour chaque scène de VIDEO."""
+    """Crée les aperçus de candidates dans le dépôt local configuré."""
     try:
         scene_settings = load_scene_detector_settings()
         scenes_result = detect_scenes(video, SceneDetector(PySceneDetectBackend(), scene_settings))
         extraction_settings = load_candidate_extraction_settings()
         extractor = CandidateExtractor(PyAVCandidateFrameBackend(), extraction_settings)
-        output = format_candidate_counts(
-            scenes_result,
+        result = persist_candidate_previews(
+            video,
             extract_candidates(video, scenes_result, extractor),
+            LocalCandidatePreviewRepository(extraction_settings.candidate_repository_dir),
         )
-    except (CandidateExtractionError, ConfigurationError, SceneDetectionError) as error:
+        output = format_candidate_repository_result(
+            scenes_result,
+            result,
+        )
+    except (
+        CandidateExtractionError,
+        CandidateRepositoryError,
+        ConfigurationError,
+        SceneDetectionError,
+    ) as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(code=1) from error
     typer.echo(output)

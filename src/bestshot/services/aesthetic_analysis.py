@@ -3,11 +3,11 @@
 from collections.abc import Iterable
 
 from bestshot.domain.candidate_frame import CandidateFrame
-from bestshot.plugins.aesthetic import ClipAestheticScorer, UnavailableAestheticScorer
+from bestshot.plugins.aesthetic import AestheticScoreProvider
 
 
 def format_aesthetic_analysis(
-    candidates: Iterable[CandidateFrame], scorer: ClipAestheticScorer | UnavailableAestheticScorer
+    candidates: Iterable[CandidateFrame], scorer: AestheticScoreProvider
 ) -> str:
     scores = [scorer.score(candidate.preview) for candidate in candidates]
     if not scores:

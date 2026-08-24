@@ -1,7 +1,7 @@
 """Tests du fallback esthétique optionnel sans téléchargement de modèle."""
 
 from bestshot.domain.candidate_frame import PreviewImage
-from bestshot.plugins.aesthetic import UnavailableAestheticScorer
+from bestshot.plugins.aesthetic import UnavailableAestheticScorer, _weights_with_prefix
 
 
 def test_unavailable_aesthetic_scorer_is_neutral() -> None:
@@ -11,3 +11,12 @@ def test_unavailable_aesthetic_scorer_is_neutral() -> None:
     assert score.is_neutral is True
     assert score.inference_ms is None
     assert score.status == "non installé"
+
+
+def test_weights_with_prefix_removes_the_model_namespace() -> None:
+    weights = _weights_with_prefix(
+        {"aesthetic_head.0.weight": "weight", "aesthetic_head.0.bias": "bias"},
+        "aesthetic_head.0.",
+    )
+
+    assert weights == {"weight": "weight", "bias": "bias"}

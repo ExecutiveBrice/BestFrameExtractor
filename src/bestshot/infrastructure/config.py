@@ -53,6 +53,7 @@ def load_candidate_extraction_settings(
     return CandidateExtractionSettings(
         fps=_positive_float(candidate_extraction, "fps"),
         analysis_max_width=_positive_int(candidate_extraction, "analysis_max_width"),
+        candidate_repository_dir=_path(candidate_extraction, "candidate_repository_dir"),
     )
 
 
@@ -215,19 +216,22 @@ def load_export_settings(config_path: Path = DEFAULT_CONFIG_PATH) -> ExportSetti
 def load_aesthetic_model_settings(config_path: Path = DEFAULT_CONFIG_PATH) -> AestheticModelSettings:
     root = _load_root(config_path)
     model = _mapping(root.get("aesthetic_model"))
-    required = ("clip_repo_id", "predictor_repo_id", "predictor_filename", "cache_dir")
+    required = ("clip_repo_id", "model_repo_id", "model_filename", "cache_dir")
     if not model or any(not isinstance(model.get(key), str) or not model[key] for key in required):
         raise ConfigurationError("Section aesthetic_model invalide.")
-    raw_min = _positive_float(model, "raw_score_min")
+    raw_min = _non_negative_float(model, "raw_score_min")
     raw_max = _positive_float(model, "raw_score_max")
     if raw_max <= raw_min:
         raise ConfigurationError("raw_score_max doit dépasser raw_score_min.")
+    token_env_value = model.get("huggingface_token_env")
+    if token_env_value is not None and (not isinstance(token_env_value, str) or not token_env_value):
+        raise ConfigurationError("aesthetic_model.huggingface_token_env doit être une chaîne non vide.")
     return AestheticModelSettings(
+        huggingface_token_env=token_env_value,
         clip_repo_id=str(model["clip_repo_id"]),
-        predictor_repo_id=str(model["predictor_repo_id"]),
-        predictor_filename=str(model["predictor_filename"]),
+        model_repo_id=str(model["model_repo_id"]),
+        model_filename=str(model["model_filename"]),
         cache_dir=Path(str(model["cache_dir"])),
-        embedding_dimension=_positive_int(model, "embedding_dimension"),
         raw_score_min=raw_min,
         raw_score_max=raw_max,
     )
@@ -252,6 +256,13 @@ def _positive_float(values: Mapping[str, object], key: str) -> float:
     if isinstance(value, (int, float)) and float(value) > 0:
         return float(value)
     raise ConfigurationError(f"Valeur positive attendue pour scene_detection.{key}.")
+
+
+def _path(values: Mapping[str, object], key: str) -> Path:
+    value = values.get(key)
+    if isinstance(value, str) and value:
+        return Path(value)
+    raise ConfigurationError(f"Chemin attendu pour {key}.")
 
 
 def _positive_int(values: Mapping[str, object], key: str) -> int:

@@ -79,6 +79,12 @@ bestshot extract "$VIDEO" --count 30 --output ./photos-png --format png
 La qualité JPEG, l'échantillonnage, les seuils de score et les limites de sélection sont
 configurables dans [`config/default.yaml`](config/default.yaml).
 
+Le dépôt prévu pour les aperçus de candidates se règle avec
+`candidate_extraction.candidate_repository_dir` (par défaut `.bestshot/candidates`).
+La commande `bestshot candidates "$VIDEO"` y crée un sous-dossier par vidéo avec les
+aperçus JPEG réduits et un `manifest.json`. Les commandes d'analyse gardent leurs
+candidates en flux et ne les exportent pas automatiquement.
+
 ## Visages et esthétique (optionnels)
 
 La détection de visages MediaPipe ne fait aucune reconnaissance de personne. Son modèle
@@ -87,8 +93,12 @@ l'export continuent simplement avec le profil « sans visage ». Pour activer ce
 analyse, placez un fichier MediaPipe Face Landmarker `.task` obtenu séparément dans ce
 chemin (ou modifiez `face_scoring.model_path` dans la configuration).
 
-Le score esthétique CLIP est également facultatif. Sans modèle, la commande continue avec
-une valeur neutre et indique son état :
+Le score esthétique est également facultatif. L'adaptateur utilise le modèle local
+[`rsinema/aesthetic-scorer`](https://huggingface.co/rsinema/aesthetic-scorer), basé sur
+CLIP ViT-B/32 et entraîné sur PARA. BestShotAI charge uniquement son `state_dict` avec
+`weights_only=True` et reconstruit localement l'architecture : aucun code distant du
+dépôt n'est exécuté. Sans modèle, la commande continue avec une valeur neutre et indique
+son état :
 
 ```bash
 bestshot models
@@ -98,7 +108,12 @@ bestshot analyse "$VIDEO" --aesthetic
 Pour l'activer, installez l'extra puis lancez le téléchargement explicite. Cette seule
 commande récupère des poids de modèle ; elle ne transmet jamais vos vidéos ou images.
 
+Si le dépôt de modèle demande une authentification Hugging Face, exportez votre jeton
+dans le terminal. Le jeton n'est jamais enregistré par BestShotAI : la configuration ne
+contient que le nom de cette variable (`HUGGINGFACE_TOKEN`).
+
 ```bash
+export HUGGINGFACE_TOKEN="votre_jeton_huggingface"
 pip install -e ".[dev,aesthetic]"
 bestshot models download aesthetic
 bestshot analyse "$VIDEO" --aesthetic
@@ -106,8 +121,8 @@ bestshot analyse "$VIDEO" --aesthetic
 
 Les poids sont mis en cache dans `.bestshot/models/aesthetic`. CLIP utilise CUDA si elle
 est disponible, sinon le CPU. Le score esthétique reste plafonné à 35 % du score global
-par défaut.
-
+par défaut. La section `aesthetic_model` de la configuration permet de modifier le dépôt,
+le nom de fichier ou la plage de sortie (par défaut, `0` à `5`).
 ## Vérification locale
 
 Pour vérifier l'installation :

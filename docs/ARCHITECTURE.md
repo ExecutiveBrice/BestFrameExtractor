@@ -69,6 +69,10 @@ la réduit à `analysis_max_width` avant de la céder au générateur. `Candidat
 itérateur et ne sont donc pas accumulées : la commande `bestshot candidates VIDEO`
 ne conserve que les compteurs par scène. Les paramètres par défaut sont définis dans
 la section `candidate_extraction` de `config/default.yaml` (3 images/s, largeur 960 px).
+`candidate_repository_dir` désigne le dépôt local des aperçus. La commande
+`bestshot candidates VIDEO` y écrit chaque preview JPEG séquentiellement ainsi qu'un
+manifeste, sans jamais enregistrer de frame native. Les analyses conservent des objets
+transitoires en flux et ne déclenchent pas cette persistance.
 
 ## Score technique
 
@@ -107,11 +111,17 @@ l'export restent possibles ; lorsqu'il est présent, le backend MediaPipe est ut
 `people` dès qu'au moins un visage a un score, sinon `no_people`. Les valeurs et poids
 de ces profils sont configurables dans `composite_scoring` de `config/default.yaml`.
 
-`AestheticScorer` et `CompositionScorer` sont déjà des interfaces. En leur absence,
-leurs implémentations neutres exposent explicitement une valeur neutre configurable :
-elles préservent les poids sans simuler un score calculé. Le résultat `CompositeScore`
-inclut toujours les objets de score détaillés, le profil retenu et une liste triée de
-`CompositeReason` (score, poids, contribution et origine), jamais un simple flottant.
+`AestheticScoreProvider` est le port des modèles esthétiques. Son premier adaptateur,
+`RsineAestheticScorer`, utilise localement `rsinema/aesthetic-scorer` : son checkpoint
+est chargé comme un `state_dict` avec `torch.load(..., weights_only=True)`, puis le
+backbone CLIP ViT-B/32 et la tête esthétique sont reconstruits dans notre code. Les poids
+sont téléchargés explicitement et restent dans `.bestshot/models/aesthetic`; aucun code
+distant du dépôt de modèle n'est exécuté. Lorsque ce modèle optionnel est absent ou
+incompatible, `UnavailableAestheticScorer` retourne une valeur neutre explicitement
+marquée et le pipeline reste fonctionnel. `CompositionScorer` demeure neutre jusqu'à son
+implémentation. Le résultat `CompositeScore` inclut toujours les objets de score détaillés,
+le profil retenu et une liste triée de `CompositeReason` (score, poids, contribution et
+origine), jamais un simple flottant.
 
 ## Raffinement de candidates
 
