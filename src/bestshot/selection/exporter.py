@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Protocol
@@ -20,6 +21,7 @@ class ExportResult:
     output_directory: Path
     image_paths: tuple[Path, ...]
     manifest_path: Path
+    cancelled: bool = False
 
 
 class FrameExporter(Protocol):
@@ -35,7 +37,14 @@ class FinalExporter:
         self._settings = settings
 
     def export(
-        self, video_path: Path, selection: SelectionResult, output_directory: Path, image_format: str = "jpeg"
+        self,
+        video_path: Path,
+        selection: SelectionResult,
+        output_directory: Path,
+        image_format: str = "jpeg",
+        *,
+        on_image_exported: Callable[[Path], None] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> ExportResult:
         extension = _extension_for(image_format)
         if not 1 <= self._settings.jpeg_quality <= 31:
@@ -43,7 +52,11 @@ class FinalExporter:
         output_directory.mkdir(parents=True, exist_ok=True)
         image_paths: list[Path] = []
         manifest_images: list[dict[str, object]] = []
+        cancelled = False
         for index, ranked in enumerate(selection.selected, start=1):
+            if should_stop is not None and should_stop():
+                cancelled = True
+                break
             candidate = ranked.candidate
             output_path = output_directory / f"{video_path.stem}_{index:04d}.{extension}"
             self._frame_exporter.extract(video_path, candidate.timestamp, output_path, self._settings.jpeg_quality)
@@ -66,12 +79,14 @@ class FinalExporter:
                     "scene_source": candidate.scene_id,
                 }
             )
+            if on_image_exported is not None:
+                on_image_exported(output_path)
         manifest_path = output_directory / "manifest.json"
         manifest_path.write_text(
             json.dumps({"source_video": str(video_path), "images": manifest_images}, indent=2),
             encoding="utf-8",
         )
-        return ExportResult(output_directory, tuple(image_paths), manifest_path)
+        return ExportResult(output_directory, tuple(image_paths), manifest_path, cancelled)
 
 
 def _extension_for(image_format: str) -> str:

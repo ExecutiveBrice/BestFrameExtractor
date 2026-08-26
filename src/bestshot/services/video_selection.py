@@ -30,7 +30,7 @@ class VideoSelectionWorkflow:
     deduplicator: Deduplicator
     selector: BestFrameSelector
 
-    def select(self, video_path: Path, count: int) -> SelectionResult:
+    def select(self, video_path: Path, count: int | None) -> SelectionResult:
         """Détecte, classe, dédoublonne et sélectionne les frames d'une vidéo."""
         scenes = detect_scenes(video_path, self.scene_detector)
         ranked = rank_candidates(

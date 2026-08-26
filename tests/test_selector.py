@@ -78,3 +78,17 @@ def test_selection_excludes_candidates_marked_as_duplicates() -> None:
 
     assert result.selected == (retained,)
     assert result.rejections[0].reason == "doublon visuel proche"
+
+
+def test_selection_without_quota_keeps_all_candidates_allowed_by_quality_and_scene_limit() -> None:
+    first, second, third = _ranked(1, 1.0, 0.90), _ranked(1, 2.0, 0.80), _ranked(1, 3.0, 0.70)
+    result = BestFrameSelector(SelectionSettings(2, 0.55)).select(
+        [first, second, third],
+        [Scene(1, 0.0, 4.0, 4.0)],
+        _deduplication(first, second, third),
+        None,
+    )
+
+    assert result.requested_count is None
+    assert result.selected == (first, second)
+    assert result.rejections[0].reason == "maximum par scène atteint"

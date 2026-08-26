@@ -29,10 +29,12 @@ class BestFrameSelector:
         candidates: Sequence[RankedCandidate],
         scenes: Sequence[Scene],
         deduplication: DeduplicationResult,
-        count: int,
+        count: int | None,
     ) -> SelectionResult:
-        if count <= 0 or self._settings.max_per_scene <= 0:
-            raise ValueError("Le nombre demandé et le maximum par scène doivent être positifs.")
+        if count is not None and count <= 0:
+            raise ValueError("Le nombre demandé doit être positif lorsqu'il est défini.")
+        if self._settings.max_per_scene <= 0:
+            raise ValueError("Le maximum par scène doit être positif.")
         if not 0.0 <= self._settings.minimum_score <= 1.0:
             raise ValueError("Le score minimal doit être compris entre 0 et 1.")
 
@@ -57,7 +59,8 @@ class BestFrameSelector:
         for values in per_scene.values():
             values.sort(key=lambda item: item.composite_score.final_score, reverse=True)
 
-        selected = self._round_robin(per_scene, count)
+        selection_limit = count if count is not None else len(candidates)
+        selected = self._round_robin(per_scene, selection_limit)
         selected_set = set(selected)
         for values in per_scene.values():
             for position, candidate in enumerate(values):

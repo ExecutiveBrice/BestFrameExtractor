@@ -36,7 +36,7 @@ def select_best_frames(
     scenes: Sequence[Scene],
     deduplicator: Deduplicator,
     selector: BestFrameSelector,
-    count: int,
+    count: int | None,
 ) -> SelectionResult:
     """Dédoublonne puis sélectionne les frames sans cacher les exclusions."""
     return selector.select(
@@ -49,7 +49,8 @@ def select_best_frames(
 
 def format_selection_result(result: SelectionResult) -> str:
     """Produit une sortie CLI concise et vérifiable."""
-    lines = [f"{len(result.selected)} sélection(s) sur {result.requested_count} demandée(s)."]
+    requested = str(result.requested_count) if result.requested_count is not None else "sans quota"
+    lines = [f"{len(result.selected)} sélection(s) — {requested}."]
     lines.extend(
         f"Scène {item.candidate.scene_id} — {item.candidate.timestamp:.3f}s "
         f"— score {item.composite_score.final_score:.3f}"

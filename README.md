@@ -23,6 +23,31 @@ pip install -e ".[dev]"
 bestshot --help
 ```
 
+## Application de bureau
+
+L'interface de bureau est optionnelle et entièrement locale. Installez son extra, puis
+lancez-la depuis la racine du dépôt :
+
+```bash
+pip install -e ".[desktop]"
+bestshot-gui
+```
+
+Elle permet de choisir le dossier de vidéos et la destination des exports, puis de régler
+trois paramètres de sélectivité avant de lancer le traitement sans bloquer la fenêtre :
+le score de qualité minimal, la fenêtre anti-doublons et le seuil de similarité visuelle.
+Il n'y a pas de quota artificiel par vidéo : seules les règles de qualité et de diversité
+déterminent le nombre final de photos. Les résultats s'affichent ensuite une image à la
+fois avec les boutons de navigation.
+
+Pendant le traitement, le compteur indique en direct le nombre de photos retenues et le
+nombre déjà exporté. Le bouton **Arrêter** demande un arrêt coopératif : aucune nouvelle
+vidéo n'est lancée, et l'export s'interrompt entre deux frames. Les photos déjà extraites
+restent disponibles avec un `manifest.json` partiel pour la vidéo interrompue.
+Elle traite les mêmes extensions et utilise le même pipeline que `bestshot batch` ; elle
+ne charge qu'une photo exportée à la fois pour la visualisation et n'envoie aucune donnée
+sur Internet.
+
 ## Où placer les vidéos
 
 Vous pouvez laisser les vidéos où elles sont : dans `~/Movies`, sur un disque externe ou
@@ -147,7 +172,7 @@ Validation effectuée le 24 août 2026 avec FFmpeg/ffprobe locaux et une vidéo 
 locale : inspection, scènes, candidates, analyse technique, analyse esthétique en mode
 fallback, sélection et export JPEG ont tous été exécutés. L'export a produit 3 JPEG
 nativement en 640 × 360 et un manifeste ; l'export PNG a aussi produit une image native
-640 × 360. Le traitement par lot de deux vidéos locales a aussi été validé. Les 56 tests
+640 × 360. Le traitement par lot de deux vidéos locales a aussi été validé. Les 65 tests
 automatisés passent.
 
 Consultez également [l'architecture](docs/ARCHITECTURE.md) et le guide contributeur

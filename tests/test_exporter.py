@@ -22,9 +22,8 @@ class FakeFrameExporter:
         output_path.write_bytes(b"native-frame")
 
 
-def _selection() -> SelectionResult:
+def _selection(timestamps: tuple[float, ...] = (12.3,)) -> SelectionResult:
     preview = PreviewImage(1, 1, b"\0\0\0")
-    candidate = CandidateFrame(2, 12.3, 123, 1920, 1080, preview)
     technical = TechnicalScore(0.9, 0.9, 0.9, 0.9, 0.9, 0.9, 0.9)
     face = FaceScore((), None, None, None, None, None, None, None, None)
     composite = CompositeScore(
@@ -36,8 +35,14 @@ def _selection() -> SelectionResult:
         CompositionScore(0.5, is_neutral=True),
         (),
     )
-    ranked = RankedCandidate(candidate, composite)
-    return SelectionResult(30, (ranked,), (), DeduplicationResult((ranked,), ()))
+    ranked = tuple(
+        RankedCandidate(
+            CandidateFrame(2, timestamp, round(timestamp * 10), 1920, 1080, preview),
+            composite,
+        )
+        for timestamp in timestamps
+    )
+    return SelectionResult(30, ranked, (), DeduplicationResult(ranked, ()))
 
 
 def test_export_writes_native_named_jpeg_and_manifest(tmp_path: Path) -> None:
@@ -63,3 +68,28 @@ def test_export_supports_png(tmp_path: Path) -> None:
     )
 
     assert result.image_paths[0].suffix == ".png"
+
+
+def test_export_stops_between_frames_and_writes_a_partial_manifest(tmp_path: Path) -> None:
+    frame_exporter = FakeFrameExporter()
+    stop_requested = False
+    exported: list[Path] = []
+
+    def on_image_exported(image_path: Path) -> None:
+        nonlocal stop_requested
+        exported.append(image_path)
+        stop_requested = True
+
+    result = FinalExporter(frame_exporter, ExportSettings(2)).export(
+        Path("vacances.mp4"),
+        _selection((12.3, 12.4)),
+        tmp_path / "photos",
+        on_image_exported=on_image_exported,
+        should_stop=lambda: stop_requested,
+    )
+
+    assert result.cancelled
+    assert len(frame_exporter.calls) == 1
+    assert result.image_paths == tuple(exported)
+    manifest = json.loads(result.manifest_path.read_text(encoding="utf-8"))
+    assert len(manifest["images"]) == 1

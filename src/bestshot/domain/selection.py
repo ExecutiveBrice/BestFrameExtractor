@@ -14,7 +14,7 @@ class SelectionRejection:
 
 @dataclass(frozen=True, slots=True)
 class SelectionResult:
-    requested_count: int
+    requested_count: int | None
     selected: tuple[RankedCandidate, ...]
     rejections: tuple[SelectionRejection, ...]
     deduplication: DeduplicationResult

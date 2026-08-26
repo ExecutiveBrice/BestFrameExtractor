@@ -23,12 +23,16 @@ dependencies = [
 
 [project.scripts]
 bestshot = "bestshot.cli:app"
+bestshot-gui = "bestshot.desktop.app:main"
 
 [project.optional-dependencies]
 aesthetic = [
     "huggingface-hub>=0.24",
     "torch>=2.3",
     "transformers>=4.44",
+]
+desktop = [
+    "PySide6>=6.8",
 ]
 dev = [
     "mypy>=1.10",
@@ -62,4 +66,8 @@ ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["huggingface_hub", "torch", "transformers"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["PySide6", "PySide6.*"]
 ignore_missing_imports = true

@@ -13,25 +13,19 @@ from bestshot.infrastructure.config import (
     ConfigurationError,
     load_aesthetic_model_settings,
     load_candidate_extraction_settings,
-    load_composite_scoring_settings,
-    load_deduplication_settings,
     load_export_settings,
-    load_face_scoring_settings,
     load_scene_detector_settings,
-    load_selection_settings,
     load_technical_scoring_settings,
 )
 from bestshot.infrastructure.ffmpeg import FFmpegExportError, FFmpegFrameExporter
 from bestshot.infrastructure.ffprobe import SubprocessFFprobeRunner
+from bestshot.infrastructure.workflow_factory import create_video_selection_workflow
 from bestshot.plugins.aesthetic import AestheticModelManager, create_aesthetic_scorer
-from bestshot.scoring.composite import CompositeScorer
-from bestshot.scoring.face import FaceScoringError, create_face_scorer
+from bestshot.scoring.face import FaceScoringError
 from bestshot.scoring.technical import TechnicalScorer
-from bestshot.selection.deduplicate import Deduplicator, PerceptualHashSimilarityScorer
 from bestshot.selection.exporter import FinalExporter
-from bestshot.selection.selector import BestFrameSelector
 from bestshot.services.aesthetic_analysis import format_aesthetic_analysis
-from bestshot.services.batch import format_batch_result, process_video_batch
+from bestshot.services.batch import BatchExportRunner, format_batch_result
 from bestshot.services.candidates import (
     extract_candidates,
     format_candidate_repository_result,
@@ -41,7 +35,6 @@ from bestshot.services.scenes import detect_scenes, format_scenes
 from bestshot.services.selection import format_selection_result
 from bestshot.services.technical_analysis import format_technical_analysis
 from bestshot.services.video_info import format_video_info, get_video_info
-from bestshot.services.video_selection import VideoSelectionWorkflow
 from bestshot.video.candidate_extractor import (
     CandidateExtractionError,
     CandidateExtractor,
@@ -56,26 +49,6 @@ app = typer.Typer(
 )
 models_app = typer.Typer(help="Gère les modèles optionnels conservés localement.")
 app.add_typer(models_app, name="models")
-
-
-def _selection_workflow() -> VideoSelectionWorkflow:
-    """Construit le workflow local partagé par les commandes select, extract et batch."""
-    face_settings = load_face_scoring_settings()
-    deduplication_settings = load_deduplication_settings()
-    return VideoSelectionWorkflow(
-        scene_detector=SceneDetector(PySceneDetectBackend(), load_scene_detector_settings()),
-        candidate_extractor=CandidateExtractor(
-            PyAVCandidateFrameBackend(), load_candidate_extraction_settings()
-        ),
-        technical_scorer=TechnicalScorer(load_technical_scoring_settings()),
-        face_scorer=create_face_scorer(face_settings),
-        composite_scorer=CompositeScorer(load_composite_scoring_settings()),
-        deduplicator=Deduplicator(
-            PerceptualHashSimilarityScorer(deduplication_settings.hash_size),
-            deduplication_settings,
-        ),
-        selector=BestFrameSelector(load_selection_settings()),
-    )
 
 
 @models_app.callback(invoke_without_command=True)
@@ -214,7 +187,7 @@ def select(
 ) -> None:
     """Sélectionne les meilleures frames diversifiées de VIDEO, sans les exporter."""
     try:
-        result = _selection_workflow().select(video, count)
+        result = create_video_selection_workflow().select(video, count)
     except (CandidateExtractionError, ConfigurationError, FaceScoringError, SceneDetectionError) as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(code=1) from error
@@ -233,7 +206,7 @@ def extract(
 ) -> None:
     """Sélectionne puis extrait des frames natives dans OUTPUT."""
     try:
-        selection = _selection_workflow().select(video, count)
+        selection = create_video_selection_workflow().select(video, count)
         result = FinalExporter(FFmpegFrameExporter(), load_export_settings()).export(
             video, selection, output, image_format
         )
@@ -263,15 +236,10 @@ def batch(
 ) -> None:
     """Traite toutes les vidéos d'un dossier et exporte une sélection par vidéo."""
     try:
-        workflow = _selection_workflow()
-        exporter = FinalExporter(FFmpegFrameExporter(), load_export_settings())
-
-        def process(video_path: Path) -> tuple[int, Path]:
-            selection = workflow.select(video_path, count)
-            result = exporter.export(video_path, selection, output / video_path.stem, image_format)
-            return len(result.image_paths), result.output_directory
-
-        result = process_video_batch(directory, process)
+        runner = BatchExportRunner(
+            create_video_selection_workflow(), FinalExporter(FFmpegFrameExporter(), load_export_settings())
+        )
+        result = runner.run(directory, count, output, image_format)
     except (ConfigurationError, ValueError) as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(code=1) from error

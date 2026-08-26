@@ -17,6 +17,7 @@
 ```text
 src/bestshot/
   cli.py             # Adaptateur CLI Typer : validation et délégation uniquement
+  desktop/           # Présentation PySide6 optionnelle (aucune logique de sélection)
   domain/            # Modèles, règles métier et interfaces indépendantes des E/S
   infrastructure/    # Adaptateurs FFmpeg/ffprobe, PyAV, fichiers et configuration
   services/          # Cas d'usage qui orchestrent le domaine et les adaptateurs
@@ -28,6 +29,10 @@ src/bestshot/
 détails liés aux bibliothèques externes : FFmpeg/ffprobe pour l'inspection et les
 opérations vidéo, PyAV pour le décodage, PySceneDetect pour les scènes, et
 OpenCV/Pillow pour l'analyse et l'export d'images.
+
+`infrastructure.workflow_factory` assemble les adaptateurs locaux et le workflow de
+sélection. La CLI et l'interface de bureau réutilisent cette même composition : elles ne
+s'appellent pas l'une l'autre et ne dupliquent donc aucune règle métier.
 
 ## Ingestion vidéo
 
@@ -169,6 +174,39 @@ timestamp, index de frame, scène et détails des scores.
 dans un ordre stable. La commande `bestshot batch DOSSIER --output PHOTOS` réutilise le
 workflow de sélection puis exporte chaque vidéo dans son propre sous-dossier. Un échec
 sur une vidéo est capturé dans le rapport final et n'interrompt pas le reste du lot.
+`BatchExportRunner` est le cas d'usage réutilisable : il expose des événements de
+progression indépendants de toute interface et conserve les chemins des exports dans son
+résultat détaillé. L'événement `completed` d'une vidéo porte également ses chemins
+d'images, ce qui permet une consultation immédiate avant la fin du lot.
+
+Les événements de lot comprennent aussi les totaux cumulés de frames retenues et de
+fichiers exportés. `BatchExportRunner.run` accepte un rappel d'arrêt coopératif : il est
+vérifié avant chaque vidéo, après sa sélection, puis entre deux extractions. `FinalExporter`
+conserve les images déjà extraites et écrit un manifeste partiel avant de signaler cet
+arrêt. La CLI n'envoie pas ce rappel et conserve donc son comportement habituel.
+
+## Application de bureau
+
+`desktop.MainWindow` est une présentation PySide6 proposée par l'extra optionnel
+`desktop`. Elle permet de choisir le dossier source et le dossier de destination, de
+lancer un `BatchExportRunner`, puis d'afficher les photos exportées une par une. Elle
+expose trois réglages temporaires à fort impact : `selection.minimum_score`,
+`deduplication.temporal_window_ms` et `deduplication.similarity_threshold`. Ils sont
+convertis en objets typés par `DesktopSelectionParameters`, sans réécrire le YAML ni
+changer les valeurs employées par la CLI. Le mode graphique passe une limite de sélection
+absente : seules les règles de qualité, déduplication et le maximum par scène configuré
+déterminent donc le nombre d'exports. Le traitement s'exécute dans `ProcessingWorker`,
+déplacé dans un `QThread`, afin que les interactions de la fenêtre restent disponibles.
+Le worker ne manipule aucun widget ; il ne transmet que les événements `BatchProgress`, le
+résultat et les erreurs vers le thread de l'interface. À chaque événement de vidéo
+terminée, la visionneuse reçoit et affiche immédiatement ses photos, sans attendre le
+reste du lot. Elle ne conserve que les chemins des photos et charge un seul `QPixmap` à la
+fois. Aucune vidéo, image ou métadonnée ne quitte la machine.
+
+La fenêtre affiche les compteurs cumulés « retenues » et « exportées » à chaque événement
+de sélection ou d'export. Son bouton Arrêter déclenche un `threading.Event` lu par le
+worker ; l'opération en cours se termine proprement, mais aucune nouvelle frame ou vidéo
+n'est démarrée ensuite.
 
 ## Configuration
 
