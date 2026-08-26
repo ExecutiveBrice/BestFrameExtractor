@@ -31,15 +31,17 @@ from bestshot.selection.deduplicate import Deduplicator, PerceptualHashSimilarit
 from bestshot.selection.exporter import FinalExporter
 from bestshot.selection.selector import BestFrameSelector
 from bestshot.services.aesthetic_analysis import format_aesthetic_analysis
+from bestshot.services.batch import format_batch_result, process_video_batch
 from bestshot.services.candidates import (
     extract_candidates,
     format_candidate_repository_result,
     persist_candidate_previews,
 )
 from bestshot.services.scenes import detect_scenes, format_scenes
-from bestshot.services.selection import format_selection_result, rank_candidates, select_best_frames
+from bestshot.services.selection import format_selection_result
 from bestshot.services.technical_analysis import format_technical_analysis
 from bestshot.services.video_info import format_video_info, get_video_info
+from bestshot.services.video_selection import VideoSelectionWorkflow
 from bestshot.video.candidate_extractor import (
     CandidateExtractionError,
     CandidateExtractor,
@@ -54,6 +56,26 @@ app = typer.Typer(
 )
 models_app = typer.Typer(help="Gère les modèles optionnels conservés localement.")
 app.add_typer(models_app, name="models")
+
+
+def _selection_workflow() -> VideoSelectionWorkflow:
+    """Construit le workflow local partagé par les commandes select, extract et batch."""
+    face_settings = load_face_scoring_settings()
+    deduplication_settings = load_deduplication_settings()
+    return VideoSelectionWorkflow(
+        scene_detector=SceneDetector(PySceneDetectBackend(), load_scene_detector_settings()),
+        candidate_extractor=CandidateExtractor(
+            PyAVCandidateFrameBackend(), load_candidate_extraction_settings()
+        ),
+        technical_scorer=TechnicalScorer(load_technical_scoring_settings()),
+        face_scorer=create_face_scorer(face_settings),
+        composite_scorer=CompositeScorer(load_composite_scoring_settings()),
+        deduplicator=Deduplicator(
+            PerceptualHashSimilarityScorer(deduplication_settings.hash_size),
+            deduplication_settings,
+        ),
+        selector=BestFrameSelector(load_selection_settings()),
+    )
 
 
 @models_app.callback(invoke_without_command=True)
@@ -192,31 +214,7 @@ def select(
 ) -> None:
     """Sélectionne les meilleures frames diversifiées de VIDEO, sans les exporter."""
     try:
-        scenes_result = detect_scenes(
-            video, SceneDetector(PySceneDetectBackend(), load_scene_detector_settings())
-        )
-        face_settings = load_face_scoring_settings()
-        ranked = rank_candidates(
-            extract_candidates(
-                video,
-                scenes_result,
-                CandidateExtractor(PyAVCandidateFrameBackend(), load_candidate_extraction_settings()),
-            ),
-            TechnicalScorer(load_technical_scoring_settings()),
-            create_face_scorer(face_settings),
-            CompositeScorer(load_composite_scoring_settings()),
-        )
-        deduplication_settings = load_deduplication_settings()
-        result = select_best_frames(
-            ranked,
-            scenes_result,
-            Deduplicator(
-                PerceptualHashSimilarityScorer(deduplication_settings.hash_size),
-                deduplication_settings,
-            ),
-            BestFrameSelector(load_selection_settings()),
-            count,
-        )
+        result = _selection_workflow().select(video, count)
     except (CandidateExtractionError, ConfigurationError, FaceScoringError, SceneDetectionError) as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(code=1) from error
@@ -235,31 +233,7 @@ def extract(
 ) -> None:
     """Sélectionne puis extrait des frames natives dans OUTPUT."""
     try:
-        scenes_result = detect_scenes(
-            video, SceneDetector(PySceneDetectBackend(), load_scene_detector_settings())
-        )
-        face_settings = load_face_scoring_settings()
-        ranked = rank_candidates(
-            extract_candidates(
-                video,
-                scenes_result,
-                CandidateExtractor(PyAVCandidateFrameBackend(), load_candidate_extraction_settings()),
-            ),
-            TechnicalScorer(load_technical_scoring_settings()),
-            create_face_scorer(face_settings),
-            CompositeScorer(load_composite_scoring_settings()),
-        )
-        deduplication_settings = load_deduplication_settings()
-        selection = select_best_frames(
-            ranked,
-            scenes_result,
-            Deduplicator(
-                PerceptualHashSimilarityScorer(deduplication_settings.hash_size),
-                deduplication_settings,
-            ),
-            BestFrameSelector(load_selection_settings()),
-            count,
-        )
+        selection = _selection_workflow().select(video, count)
         result = FinalExporter(FFmpegFrameExporter(), load_export_settings()).export(
             video, selection, output, image_format
         )
@@ -275,3 +249,32 @@ def extract(
         raise typer.Exit(code=1) from error
     typer.echo(f"{len(result.image_paths)} image(s) exportée(s) dans {result.output_directory}")
     typer.echo(f"Manifeste : {result.manifest_path}")
+
+
+@app.command()
+def batch(
+    directory: Annotated[
+        Path,
+        typer.Argument(..., exists=True, file_okay=False, dir_okay=True, readable=True),
+    ],
+    count: Annotated[int, typer.Option("--count", min=1)] = 30,
+    output: Annotated[Path, typer.Option("--output", file_okay=False)] = Path("photos"),
+    image_format: Annotated[str, typer.Option("--format")] = "jpeg",
+) -> None:
+    """Traite toutes les vidéos d'un dossier et exporte une sélection par vidéo."""
+    try:
+        workflow = _selection_workflow()
+        exporter = FinalExporter(FFmpegFrameExporter(), load_export_settings())
+
+        def process(video_path: Path) -> tuple[int, Path]:
+            selection = workflow.select(video_path, count)
+            result = exporter.export(video_path, selection, output / video_path.stem, image_format)
+            return len(result.image_paths), result.output_directory
+
+        result = process_video_batch(directory, process)
+    except (ConfigurationError, ValueError) as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=1) from error
+    typer.echo(format_batch_result(result))
+    if result.failures:
+        raise typer.Exit(code=1)

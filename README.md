@@ -51,6 +51,16 @@ bestshot select "$VIDEO" --count 20
 bestshot extract "$VIDEO" --count 30 --output ./photos
 ```
 
+Pour traiter toutes les vidéos directement présentes dans un dossier :
+
+```bash
+bestshot batch "$HOME/Downloads/videos" --count 30 --output ./photos
+```
+
+Chaque vidéo reçoit son propre sous-dossier dans `./photos`. Les extensions prises en
+charge sont `.mp4`, `.mov`, `.mkv`, `.m4v` et `.avi`. Le lot continue lorsqu'une vidéo
+échoue, puis affiche le détail des réussites et des erreurs.
+
 `info` affiche les métadonnées FFprobe. `scenes` détecte les changements de plan ; si
 aucun changement n'est trouvé, la vidéo entière forme une scène. `candidates` montre le
 nombre d'aperçus analysés par scène. `select` affiche les images retenues sans créer de
@@ -137,7 +147,8 @@ Validation effectuée le 24 août 2026 avec FFmpeg/ffprobe locaux et une vidéo 
 locale : inspection, scènes, candidates, analyse technique, analyse esthétique en mode
 fallback, sélection et export JPEG ont tous été exécutés. L'export a produit 3 JPEG
 nativement en 640 × 360 et un manifeste ; l'export PNG a aussi produit une image native
-640 × 360. Les 52 tests automatisés passent.
+640 × 360. Le traitement par lot de deux vidéos locales a aussi été validé. Les 56 tests
+automatisés passent.
 
 Consultez également [l'architecture](docs/ARCHITECTURE.md) et le guide contributeur
 [AGENTS.md](AGENTS.md).

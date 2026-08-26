@@ -163,6 +163,13 @@ frame de la vidéo originale, sans jamais agrandir les previews d'analyse. Il pr
 des JPEG configurables ou des PNG, ainsi qu'un `manifest.json` contenant source,
 timestamp, index de frame, scène et détails des scores.
 
+## Traitement par lot
+
+`services.batch` découvre les vidéos directement présentes dans un dossier et les traite
+dans un ordre stable. La commande `bestshot batch DOSSIER --output PHOTOS` réutilise le
+workflow de sélection puis exporte chaque vidéo dans son propre sous-dossier. Un échec
+sur une vidéo est capturé dans le rapport final et n'interrompt pas le reste du lot.
+
 ## Configuration
 
 La configuration par défaut est `config/default.yaml`. Elle est lue par un adaptateur
