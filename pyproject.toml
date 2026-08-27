@@ -5,34 +5,31 @@ build-backend = "hatchling.build"
 [project]
 name = "bestshotai"
 version = "0.1.0"
-description = "Extraction locale des meilleures images fixes depuis des vidéos familiales."
+description = "Présélection temporelle locale et embeddings visuels de vidéos."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
 authors = [{ name = "BestShotAI contributors" }]
 dependencies = [
     "av>=12.0",
-    "mediapipe>=0.10",
     "numpy>=2.0",
     "opencv-python-headless>=4.10",
-    "Pillow>=10.0",
-    "scenedetect>=0.6",
     "PyYAML>=6.0",
     "typer>=0.12",
 ]
 
 [project.scripts]
 bestshot = "bestshot.cli:app"
-bestshot-gui = "bestshot.desktop.app:main"
 
 [project.optional-dependencies]
-aesthetic = [
+embedding = [
     "huggingface-hub>=0.24",
+    "Pillow>=10.0",
     "torch>=2.3",
     "transformers>=4.44",
 ]
 desktop = [
-    "PySide6>=6.8",
+    "PySide6>=6.7",
 ]
 dev = [
     "mypy>=1.10",
@@ -61,13 +58,5 @@ strict = true
 packages = ["bestshot"]
 
 [[tool.mypy.overrides]]
-module = ["mediapipe", "mediapipe.*"]
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
 module = ["huggingface_hub", "torch", "transformers"]
-ignore_missing_imports = true
-
-[[tool.mypy.overrides]]
-module = ["PySide6", "PySide6.*"]
 ignore_missing_imports = true

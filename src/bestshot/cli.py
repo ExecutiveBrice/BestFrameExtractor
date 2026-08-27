@@ -1,248 +1,313 @@
-"""Interface en ligne de commande de BestShotAI."""
+"""Interface en ligne de commande du pipeline BestShotAI V2."""
 
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
-from bestshot.infrastructure.candidate_repository import (
-    CandidateRepositoryError,
-    LocalCandidatePreviewRepository,
-)
+from bestshot.dataset.preview_cache import PreviewCache, PreviewCacheError
+from bestshot.dataset.sqlite_repository import DatasetRepositoryError, SQLiteDatasetRepository
+from bestshot.domain.preview_image import PreviewImage
+from bestshot.embedding.cache import EmbeddingCache
+from bestshot.embedding.dinov2 import DINOv2EmbeddingProvider, DINOv2ModelError, DINOv2ModelManager
+from bestshot.embedding.provider import EmbeddingError
 from bestshot.infrastructure.config import (
     ConfigurationError,
-    load_aesthetic_model_settings,
-    load_candidate_extraction_settings,
-    load_export_settings,
-    load_scene_detector_settings,
-    load_technical_scoring_settings,
+    load_dataset_settings,
+    load_embedding_settings,
+    load_pair_generation_settings,
+    load_personal_ranking_settings,
+    load_presampling_settings,
 )
-from bestshot.infrastructure.ffmpeg import FFmpegExportError, FFmpegFrameExporter
+from bestshot.infrastructure.embedding_frames import (
+    EmbeddingFrameReadError,
+    PyAVCandidatePreviewReader,
+)
 from bestshot.infrastructure.ffprobe import SubprocessFFprobeRunner
-from bestshot.infrastructure.workflow_factory import create_video_selection_workflow
-from bestshot.plugins.aesthetic import AestheticModelManager, create_aesthetic_scorer
-from bestshot.scoring.face import FaceScoringError
-from bestshot.scoring.technical import TechnicalScorer
-from bestshot.selection.exporter import FinalExporter
-from bestshot.services.aesthetic_analysis import format_aesthetic_analysis
-from bestshot.services.batch import BatchExportRunner, format_batch_result
-from bestshot.services.candidates import (
-    extract_candidates,
-    format_candidate_repository_result,
-    persist_candidate_previews,
+from bestshot.infrastructure.temporal_sampling import PyAVTemporalSamplingBackend
+from bestshot.learning.ranking_model import RankingModelError
+from bestshot.learning.ranking_trainer import (
+    RankingTrainingError,
+    load_current_ranking_model,
 )
-from bestshot.services.scenes import detect_scenes, format_scenes
-from bestshot.services.selection import format_selection_result
-from bestshot.services.technical_analysis import format_technical_analysis
-from bestshot.services.video_info import format_video_info, get_video_info
-from bestshot.video.candidate_extractor import (
-    CandidateExtractionError,
-    CandidateExtractor,
-    PyAVCandidateFrameBackend,
+from bestshot.sampling.candidate_generator import CandidateGenerationError, CandidateGenerator
+from bestshot.sampling.sharpness_ranker import SharpnessRanker
+from bestshot.sampling.temporal_sampler import (
+    PresamplingSettings,
+    TemporalSampler,
+    TemporalSamplingError,
 )
+from bestshot.services.dataset import (
+    format_dataset_stats,
+    format_dataset_videos,
+    get_dataset_stats,
+    list_dataset_videos,
+    reset_dataset_labels,
+)
+from bestshot.services.embeddings import VideoEmbeddingRunner, format_embedding_report
+from bestshot.services.preferences import (
+    PreferenceServiceError,
+    format_preference_stats,
+    generate_video_preferences,
+)
+from bestshot.services.presampling import format_presampling_report, generate_presampling_report
+from bestshot.services.ranking import format_ranking_training_result, train_personal_ranking
 from bestshot.video.probe import VideoProbe, VideoProbeError
-from bestshot.video.scene_detector import PySceneDetectBackend, SceneDetectionError, SceneDetector
 
 app = typer.Typer(
     add_completion=False,
-    help="Extraction locale des meilleures images fixes depuis une vidéo.",
+    help="Présélection locale de candidates vidéo et embeddings visuels V2.",
 )
-models_app = typer.Typer(help="Gère les modèles optionnels conservés localement.")
+models_app = typer.Typer(help="Gère les poids d'embedding conservés localement.")
+dataset_app = typer.Typer(help="Consulte et administre le dataset local de préférences.")
+preferences_app = typer.Typer(help="Génère et consulte les comparaisons pairwise locales.")
 app.add_typer(models_app, name="models")
+app.add_typer(dataset_app, name="dataset")
+app.add_typer(preferences_app, name="preferences")
+PERSONAL_MODELS_DIRECTORY = Path(".bestshot/models/personal")
 
 
 @models_app.callback(invoke_without_command=True)
 def models() -> None:
-    """Affiche l'état du modèle esthétique local."""
-    settings = load_aesthetic_model_settings()
-    status = AestheticModelManager().status(settings)
-    typer.echo(f"Modèle esthétique : {status.message} ({status.cache_path})")
+    """Affiche l'état du modèle DINOv2 local."""
+    status = DINOv2ModelManager().status(load_embedding_settings())
+    typer.echo(f"Modèle embedding : {status.message} ({status.cache_path})")
 
 
 @models_app.command("download")
 def download_model(name: str = typer.Argument(...)) -> None:
-    """Télécharge explicitement un modèle optionnel dans le cache local."""
-    if name != "aesthetic":
-        raise typer.BadParameter("Seul le modèle aesthetic est disponible.")
+    """Télécharge explicitement les poids d'embedding, sans transmettre de vidéo."""
+    if name != "embedding":
+        raise typer.BadParameter("Seul le modèle embedding est disponible.")
     try:
-        status = AestheticModelManager().download(load_aesthetic_model_settings())
-    except (ConfigurationError, OSError, RuntimeError) as error:
+        status = DINOv2ModelManager().download(load_embedding_settings())
+    except (ConfigurationError, DINOv2ModelError, OSError) as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(code=1) from error
-    typer.echo(f"Modèle esthétique : {status.message} ({status.cache_path})")
+    typer.echo(f"Modèle embedding : {status.message} ({status.cache_path})")
 
 
 @app.command()
-def info(
+def presample(
     video: Annotated[
         Path,
         typer.Argument(..., exists=True, file_okay=True, dir_okay=False, readable=True),
     ],
 ) -> None:
-    """Affiche les métadonnées de VIDEO collectées par ffprobe."""
+    """Génère les candidates V2 par fenêtres temporelles, sans score esthétique."""
     try:
-        result = get_video_info(video, VideoProbe(SubprocessFFprobeRunner()))
-    except VideoProbeError as error:
-        typer.echo(str(error), err=True)
-        raise typer.Exit(code=1) from error
-    typer.echo(format_video_info(result))
-
-
-@app.command()
-def scenes(
-    video: Annotated[
-        Path,
-        typer.Argument(..., exists=True, file_okay=True, dir_okay=False, readable=True),
-    ],
-) -> None:
-    """Affiche les scènes de VIDEO détectées localement."""
-    try:
-        settings = load_scene_detector_settings()
-        detector = SceneDetector(PySceneDetectBackend(), settings)
-        result = detect_scenes(video, detector)
-    except (ConfigurationError, SceneDetectionError) as error:
-        typer.echo(str(error), err=True)
-        raise typer.Exit(code=1) from error
-    typer.echo(format_scenes(result))
-
-
-@app.command()
-def candidates(
-    video: Annotated[
-        Path,
-        typer.Argument(..., exists=True, file_okay=True, dir_okay=False, readable=True),
-    ],
-) -> None:
-    """Crée les aperçus de candidates dans le dépôt local configuré."""
-    try:
-        scene_settings = load_scene_detector_settings()
-        scenes_result = detect_scenes(video, SceneDetector(PySceneDetectBackend(), scene_settings))
-        extraction_settings = load_candidate_extraction_settings()
-        extractor = CandidateExtractor(PyAVCandidateFrameBackend(), extraction_settings)
-        result = persist_candidate_previews(
+        settings = load_presampling_settings()
+        report = generate_presampling_report(
             video,
-            extract_candidates(video, scenes_result, extractor),
-            LocalCandidatePreviewRepository(extraction_settings.candidate_repository_dir),
-        )
-        output = format_candidate_repository_result(
-            scenes_result,
-            result,
+            VideoProbe(SubprocessFFprobeRunner()),
+            _create_candidate_generator(settings),
         )
     except (
-        CandidateExtractionError,
-        CandidateRepositoryError,
+        CandidateGenerationError,
         ConfigurationError,
-        SceneDetectionError,
-    ) as error:
-        typer.echo(str(error), err=True)
-        raise typer.Exit(code=1) from error
-    typer.echo(output)
-
-
-@app.command()
-def analyse(
-    video: Annotated[
-        Path,
-        typer.Argument(..., exists=True, file_okay=True, dir_okay=False, readable=True),
-    ],
-    technical_only: Annotated[
-        bool,
-        typer.Option("--technical-only", help="Calcule uniquement les scores techniques."),
-    ] = False,
-    aesthetic: Annotated[bool, typer.Option("--aesthetic", help="Active le plugin CLIP esthétique local.")] = False,
-) -> None:
-    """Analyse VIDEO ; utilisez --technical-only pour le scorer technique disponible."""
-    if not technical_only and not aesthetic:
-        typer.echo("Sélectionnez --technical-only ou --aesthetic.", err=True)
-        raise typer.Exit(code=2)
-    try:
-        scene_settings = load_scene_detector_settings()
-        scenes_result = detect_scenes(video, SceneDetector(PySceneDetectBackend(), scene_settings))
-        extraction_settings = load_candidate_extraction_settings()
-        candidates_result = extract_candidates(
-            video,
-            scenes_result,
-            CandidateExtractor(PyAVCandidateFrameBackend(), extraction_settings),
-        )
-        output = (
-            format_aesthetic_analysis(candidates_result, create_aesthetic_scorer(load_aesthetic_model_settings()))
-            if aesthetic
-            else format_technical_analysis(
-                scenes_result, candidates_result, TechnicalScorer(load_technical_scoring_settings())
-            )
-        )
-    except (CandidateExtractionError, ConfigurationError, SceneDetectionError) as error:
-        typer.echo(str(error), err=True)
-        raise typer.Exit(code=1) from error
-    typer.echo(output)
-
-
-@app.command()
-def select(
-    video: Annotated[
-        Path,
-        typer.Argument(..., exists=True, file_okay=True, dir_okay=False, readable=True),
-    ],
-    count: Annotated[int, typer.Option("--count", min=1, help="Nombre maximal de photos à retenir.")] = 20,
-) -> None:
-    """Sélectionne les meilleures frames diversifiées de VIDEO, sans les exporter."""
-    try:
-        result = create_video_selection_workflow().select(video, count)
-    except (CandidateExtractionError, ConfigurationError, FaceScoringError, SceneDetectionError) as error:
-        typer.echo(str(error), err=True)
-        raise typer.Exit(code=1) from error
-    typer.echo(format_selection_result(result))
-
-
-@app.command()
-def extract(
-    video: Annotated[
-        Path,
-        typer.Argument(..., exists=True, file_okay=True, dir_okay=False, readable=True),
-    ],
-    count: Annotated[int, typer.Option("--count", min=1)] = 30,
-    output: Annotated[Path, typer.Option("--output", file_okay=False)] = Path("photos"),
-    image_format: Annotated[str, typer.Option("--format")] = "jpeg",
-) -> None:
-    """Sélectionne puis extrait des frames natives dans OUTPUT."""
-    try:
-        selection = create_video_selection_workflow().select(video, count)
-        result = FinalExporter(FFmpegFrameExporter(), load_export_settings()).export(
-            video, selection, output, image_format
-        )
-    except (
-        CandidateExtractionError,
-        ConfigurationError,
-        FaceScoringError,
-        FFmpegExportError,
-        SceneDetectionError,
+        TemporalSamplingError,
+        VideoProbeError,
         ValueError,
     ) as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(code=1) from error
-    typer.echo(f"{len(result.image_paths)} image(s) exportée(s) dans {result.output_directory}")
-    typer.echo(f"Manifeste : {result.manifest_path}")
+    typer.echo(format_presampling_report(report))
 
 
 @app.command()
-def batch(
-    directory: Annotated[
+def embeddings(
+    video: Annotated[
         Path,
-        typer.Argument(..., exists=True, file_okay=False, dir_okay=True, readable=True),
+        typer.Argument(..., exists=True, file_okay=True, dir_okay=False, readable=True),
     ],
-    count: Annotated[int, typer.Option("--count", min=1)] = 30,
-    output: Annotated[Path, typer.Option("--output", file_okay=False)] = Path("photos"),
-    image_format: Annotated[str, typer.Option("--format")] = "jpeg",
 ) -> None:
-    """Traite toutes les vidéos d'un dossier et exporte une sélection par vidéo."""
+    """Calcule localement les embeddings DINOv2 des candidates V2 et les met en cache."""
     try:
-        runner = BatchExportRunner(
-            create_video_selection_workflow(), FinalExporter(FFmpegFrameExporter(), load_export_settings())
-        )
-        result = runner.run(directory, count, output, image_format)
-    except (ConfigurationError, ValueError) as error:
+        presampling_settings = load_presampling_settings()
+        embedding_settings = load_embedding_settings()
+        report = VideoEmbeddingRunner(
+            _create_candidate_generator(presampling_settings),
+            PyAVCandidatePreviewReader(),
+            DINOv2EmbeddingProvider(embedding_settings),
+            EmbeddingCache(embedding_settings.embedding_cache_dir),
+            presampling_settings.analysis_max_width,
+            _create_dataset_repository(),
+            PreviewCache(load_dataset_settings().preview_cache_dir),
+        ).run(video)
+    except (
+        CandidateGenerationError,
+        ConfigurationError,
+        DINOv2ModelError,
+        EmbeddingError,
+        EmbeddingFrameReadError,
+        DatasetRepositoryError,
+        TemporalSamplingError,
+        PreviewCacheError,
+        ValueError,
+    ) as error:
         typer.echo(str(error), err=True)
         raise typer.Exit(code=1) from error
-    typer.echo(format_batch_result(result))
-    if result.failures:
-        raise typer.Exit(code=1)
+    typer.echo(format_embedding_report(report))
+
+
+@preferences_app.command("generate")
+def preferences_generate(
+    video: Annotated[
+        Path,
+        typer.Argument(..., exists=True, file_okay=True, dir_okay=False, readable=True),
+    ],
+) -> None:
+    """Propose des paires locales non encore comparées pour une vidéo ingérée."""
+    try:
+        pairs = generate_video_preferences(
+            _create_dataset_repository(),
+            video,
+            load_pair_generation_settings(),
+        )
+    except (ConfigurationError, DatasetRepositoryError, PreferenceServiceError, ValueError) as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=1) from error
+    typer.echo(f"Paires proposées : {len(pairs)}")
+    for pair in pairs:
+        typer.echo(f"{pair.first_frame_id} vs {pair.second_frame_id} ({pair.reason})")
+
+
+@preferences_app.command("stats")
+def preferences_stats() -> None:
+    """Affiche la couverture des réponses pairwise, SKIP compris."""
+    try:
+        typer.echo(format_preference_stats(_create_dataset_repository().preference_stats()))
+    except (ConfigurationError, DatasetRepositoryError) as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=1) from error
+
+
+@preferences_app.command("review")
+def preferences_review(
+    video: Annotated[
+        Path,
+        typer.Argument(..., exists=True, file_okay=True, dir_okay=False, readable=True),
+    ],
+    reviewed: Annotated[
+        bool,
+        typer.Option("--reviewed", help="Inclut les paires déjà enregistrées pour modifier une réponse."),
+    ] = False,
+) -> None:
+    """Ouvre l'écran PySide6 local de comparaison des candidates d'une vidéo."""
+    from bestshot.desktop.pairwise_review import PreferenceWindowError, run_pairwise_review
+
+    try:
+        raise typer.Exit(
+            code=run_pairwise_review(
+                load_dataset_settings().database_path,
+                video,
+                load_pair_generation_settings(),
+                include_reviewed=reviewed,
+            )
+        )
+    except (ConfigurationError, PreferenceWindowError) as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=1) from error
+
+
+@app.command("train-ranking")
+def train_ranking() -> None:
+    """Entraîne localement un head linéaire sur les préférences non-SKIP."""
+    try:
+        embedding_settings = load_embedding_settings()
+        result, artifact = train_personal_ranking(
+            _create_dataset_repository(),
+            load_personal_ranking_settings(),
+            PERSONAL_MODELS_DIRECTORY,
+            f"{embedding_settings.repo_id}@{embedding_settings.revision}:"
+            f"{embedding_settings.model_version}",
+        )
+    except (ConfigurationError, DatasetRepositoryError, RankingTrainingError, RuntimeError, ValueError) as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=1) from error
+    typer.echo(format_ranking_training_result(result, artifact))
+
+
+@app.command("ranking-score")
+def ranking_score(
+    image: Annotated[
+        Path,
+        typer.Argument(..., exists=True, file_okay=True, dir_okay=False, readable=True),
+    ],
+) -> None:
+    """Calcule le score du modèle personnel courant pour une image locale."""
+    try:
+        provider = DINOv2EmbeddingProvider(load_embedding_settings())
+        model = load_current_ranking_model(PERSONAL_MODELS_DIRECTORY)
+        score = model.score(provider.embed(_preview_from_image(image)))
+    except (
+        ConfigurationError,
+        DINOv2ModelError,
+        EmbeddingError,
+        OSError,
+        RankingModelError,
+        RuntimeError,
+        ValueError,
+    ) as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=1) from error
+    typer.echo(f"Score personnel : {score:.6f}")
+
+
+@dataset_app.command("stats")
+def dataset_stats() -> None:
+    """Affiche les compteurs du dataset local, y compris les labels SKIP."""
+    try:
+        typer.echo(format_dataset_stats(get_dataset_stats(_create_dataset_repository())))
+    except (ConfigurationError, DatasetRepositoryError) as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=1) from error
+
+
+@dataset_app.command("reset-labels")
+def dataset_reset_labels() -> None:
+    """Supprime tous les labels KEEP/REJECT et remet les frames à SKIP."""
+    try:
+        count = reset_dataset_labels(_create_dataset_repository())
+    except (ConfigurationError, DatasetRepositoryError) as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=1) from error
+    typer.echo(f"{count} label(s) réinitialisé(s) en SKIP.")
+
+
+@dataset_app.command("videos")
+def dataset_videos() -> None:
+    """Liste les vidéos connues du dataset et leurs compteurs de labels."""
+    try:
+        typer.echo(format_dataset_videos(list_dataset_videos(_create_dataset_repository())))
+    except (ConfigurationError, DatasetRepositoryError) as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=1) from error
+
+
+def _create_candidate_generator(settings: PresamplingSettings) -> CandidateGenerator:
+    """Assemble les composants du présampling temporel V2."""
+    return CandidateGenerator(
+        TemporalSampler(PyAVTemporalSamplingBackend(), settings),
+        SharpnessRanker(),
+        settings,
+    )
+
+
+def _create_dataset_repository() -> SQLiteDatasetRepository:
+    """Ouvre et migre le dataset SQLite local défini dans la configuration."""
+    return SQLiteDatasetRepository(load_dataset_settings().database_path)
+
+
+def _preview_from_image(image_path: Path) -> PreviewImage:
+    """Lit localement une image pour le score, sans appel réseau ni fichier temporaire."""
+    try:
+        from PIL import Image
+    except ImportError as error:
+        raise RankingModelError("Installez l'extra : pip install -e '.[embedding]'.") from error
+    try:
+        with Image.open(image_path) as source:
+            rgb = source.convert("RGB")
+            return PreviewImage(rgb.width, rgb.height, rgb.tobytes())
+    except OSError as error:
+        raise RankingModelError(f"Impossible de lire l'image locale : {image_path}") from error

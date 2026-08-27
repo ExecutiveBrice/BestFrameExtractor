@@ -1,108 +1,38 @@
-# Configuration par défaut de BestShotAI.
-# Les valeurs de sélection seront ajoutées avec les algorithmes d'analyse.
-processing:
-  local_only: true
-  max_frames_in_memory: 1
+# Configuration locale du pipeline BestShotAI V2.
+personal_pipeline:
+  presampling:
+    analysis_fps: 8
+    bucket_seconds: 1.0
+    keep_per_bucket: 2
+    analysis_max_width: 640
 
-video:
-  ffmpeg_binary: ffmpeg
-  ffprobe_binary: ffprobe
-
-scene_detection:
-  # AdaptiveDetector est adapté aux vidéos avec mouvements de caméra fréquents.
-  adaptive_threshold: 3.0
-  min_scene_len_frames: 15
-  window_width: 2
-  min_content_val: 15.0
-
-candidate_extraction:
-  fps: 3
-  analysis_max_width: 960
-  # Dépôt local réservé aux aperçus de candidates, jamais aux frames natives.
-  candidate_repository_dir: .bestshot/candidates
-
-technical_scoring:
-  sharpness_min_variance: 15.0
-  sharpness_good_variance: 200.0
-  exposure_target: 0.5
-  exposure_max_deviation: 0.35
-  burned_pixel_threshold: 0.98
-  burned_pixels_max_fraction: 0.02
-  underexposed_pixel_threshold: 0.05
-  underexposed_pixels_max_fraction: 0.10
-  contrast_min_stddev: 0.04
-  contrast_good_stddev: 0.20
-  motion_blur_min_gradient: 0.01
-  motion_blur_max_anisotropy: 0.60
-  weights:
-    sharpness: 1.0
-    exposure: 1.0
-    burned_pixels: 1.0
-    underexposed_pixels: 1.0
-    contrast: 1.0
-    motion_blur: 1.0
-
-face_scoring:
-  # Modèle Face Landmarker téléchargé et conservé localement.
-  model_path: models/face_landmarker.task
-  max_faces: 10
-  min_face_detection_confidence: 0.5
-  min_face_presence_confidence: 0.5
-  min_tracking_confidence: 0.5
-  yaw_scale_degrees: 45.0
-  face_cut_off_margin: 0.02
-  size_min_relative_area: 0.02
-  size_good_relative_area: 0.12
-  max_yaw_degrees: 35.0
-  sharpness_min_variance: 15.0
-  sharpness_good_variance: 200.0
-  weights:
-    detection_confidence: 1.0
-    size: 1.0
-    orientation: 1.0
-    eyes_open: 1.5
-    positive_expression: 0.5
-    sharpness: 1.5
-    crop: 1.5
-
-composite_scoring:
-  # Valeur neutre utilisée jusqu'à l'implémentation des scorers esthétique/composition.
-  neutral_score: 0.5
-  people:
-    technical: 0.30
-    face: 0.40
-    aesthetic: 0.20
-    composition: 0.10
-  no_people:
-    technical: 0.40
-    aesthetic: 0.35
-    composition: 0.25
-
-refinement:
-  enabled: true
-  window_ms: 500
-  candidates_per_scene: 3
-
-deduplication:
-  similarity_threshold: 0.90
-  temporal_window_ms: 1000
-  hash_size: 8
-
-selection:
-  max_per_scene: 3
-  minimum_score: 0.55
-
-export:
-  # Échelle q:v de FFmpeg : 2 est une haute qualité JPEG.
-  jpeg_quality: 2
-
-aesthetic_model:
-  # Nom de la variable d'environnement contenant le jeton Hugging Face.
-  # Ne jamais inscrire le jeton lui-même dans ce fichier.
+embedding_model:
+  # Le téléchargement des poids est explicite ; les inférences sont strictement locales.
   huggingface_token_env: HUGGINGFACE_TOKEN
-  clip_repo_id: openai/clip-vit-base-patch32
-  model_repo_id: rsinema/aesthetic-scorer
-  model_filename: model.pt
-  cache_dir: .bestshot/models/aesthetic
-  raw_score_min: 0.0
-  raw_score_max: 5.0
+  repo_id: facebook/dinov2-small
+  revision: main
+  # À incrémenter lors de tout changement de backbone ou de poids.
+  model_version: dinov2-vits14-1
+  model_cache_dir: .bestshot/models/embedding/dinov2-vits14
+  embedding_cache_dir: .bestshot/embeddings
+
+dataset:
+  database_path: .bestshot/dataset/bestshot.db
+  # Les aperçus réduits restent hors de SQLite et sont référencés par les frames.
+  preview_cache_dir: .bestshot/dataset/previews
+
+pair_generation:
+  temporal_window_seconds: 5
+  max_pairs_per_group: 10
+  seed: 42
+
+personal_ranking:
+  model_type: linear
+  equal_loss_weight: 0.5
+  learning_rate: 0.001
+  epochs: 100
+  weight_decay: 0.0001
+  validation_ratio: 0.20
+  early_stopping_patience: 10
+  equality_margin: 0.05
+  seed: 42

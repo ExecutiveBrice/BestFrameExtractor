@@ -1,1 +1,1 @@
-"""Interface graphique locale optionnelle de BestShotAI."""
+"""Interfaces PySide6 optionnelles, séparées des cas d'usage et du domaine."""

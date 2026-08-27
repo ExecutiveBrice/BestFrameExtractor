@@ -1,166 +1,100 @@
-# BestShotAI
+# BestShotAI V2
 
-BestShotAI sélectionne localement les meilleures images fixes d'une vidéo. Les vidéos,
-aperçus et métadonnées restent sur la machine : aucune image n'est envoyée sur Internet.
+BestShotAI V2 produit localement des candidates stables depuis une vidéo, puis calcule des
+embeddings visuels DINOv2 pour les candidates. Les vidéos, les aperçus et les embeddings
+restent sur la machine : aucune image n'est envoyée sur Internet.
 
 ## Installation
 
-Pré-requis : Python 3.12, `ffmpeg` et `ffprobe` dans le `PATH`.
-
-Sur macOS avec Homebrew :
-
-```bash
-brew install ffmpeg
-```
-
-Depuis la racine du dépôt :
+Pré-requis : Python 3.12 et `ffprobe` dans le `PATH`.
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-pip install -e ".[dev]"
+pip install -e ".[dev,embedding]"
 bestshot --help
 ```
 
-## Application de bureau
+## Utilisation
 
-L'interface de bureau est optionnelle et entièrement locale. Installez son extra, puis
-lancez-la depuis la racine du dépôt :
-
-```bash
-pip install -e ".[desktop]"
-bestshot-gui
-```
-
-Elle permet de choisir le dossier de vidéos et la destination des exports, puis de régler
-trois paramètres de sélectivité avant de lancer le traitement sans bloquer la fenêtre :
-le score de qualité minimal, la fenêtre anti-doublons et le seuil de similarité visuelle.
-Il n'y a pas de quota artificiel par vidéo : seules les règles de qualité et de diversité
-déterminent le nombre final de photos. Les résultats s'affichent ensuite une image à la
-fois avec les boutons de navigation.
-
-Pendant le traitement, le compteur indique en direct le nombre de photos retenues et le
-nombre déjà exporté. Le bouton **Arrêter** demande un arrêt coopératif : aucune nouvelle
-vidéo n'est lancée, et l'export s'interrompt entre deux frames. Les photos déjà extraites
-restent disponibles avec un `manifest.json` partiel pour la vidéo interrompue.
-Elle traite les mêmes extensions et utilise le même pipeline que `bestshot batch` ; elle
-ne charge qu'une photo exportée à la fois pour la visualisation et n'envoie aucune donnée
-sur Internet.
-
-## Où placer les vidéos
-
-Vous pouvez laisser les vidéos où elles sont : dans `~/Movies`, sur un disque externe ou
-dans un dossier de travail. BestShotAI ne les copie pas et ne les modifie pas. Passez
-simplement leur chemin à chaque commande.
-
-Les exports doivent être placés dans un dossier distinct, par exemple `./photos` ou
-`~/Pictures/BestShotAI/vacances`. N'utilisez pas le dossier contenant vos originaux pour
-éviter de mélanger sources et résultats.
+Les vidéos restent à leur emplacement d'origine. Définissez simplement leur chemin :
 
 ```bash
 VIDEO="$HOME/Movies/vacances.mp4"
 ```
 
-## Démarrage rapide
-
-Activez l'environnement virtuel (`source .venv/bin/activate`), puis lancez les commandes
-suivantes :
-
-```bash
-bestshot info "$VIDEO"
-bestshot scenes "$VIDEO"
-bestshot candidates "$VIDEO"
-bestshot analyse "$VIDEO" --technical-only
-bestshot select "$VIDEO" --count 20
-bestshot extract "$VIDEO" --count 30 --output ./photos
-```
-
-Pour traiter toutes les vidéos directement présentes dans un dossier :
+Le présampling décode séquentiellement la vidéo, analyse environ 8 frames/s et conserve
+les deux frames les plus nettes de chaque fenêtre d'une seconde. La netteté sert
+uniquement à classer les frames de leur propre fenêtre : elle n'est jamais un seuil de
+qualité ni une comparaison entre vidéos.
 
 ```bash
-bestshot batch "$HOME/Downloads/videos" --count 30 --output ./photos
+bestshot presample "$VIDEO"
 ```
 
-Chaque vidéo reçoit son propre sous-dossier dans `./photos`. Les extensions prises en
-charge sont `.mp4`, `.mov`, `.mkv`, `.m4v` et `.avi`. Le lot continue lorsqu'une vidéo
-échoue, puis affiche le détail des réussites et des erreurs.
+La commande affiche la durée, les frames décodées, les frames analysées, les candidates
+générées et leur densité par minute. Elle ne crée aucun fichier.
 
-`info` affiche les métadonnées FFprobe. `scenes` détecte les changements de plan ; si
-aucun changement n'est trouvé, la vidéo entière forme une scène. `candidates` montre le
-nombre d'aperçus analysés par scène. `select` affiche les images retenues sans créer de
-fichier. `extract` produit les images finales dans leur résolution native.
+## Embeddings DINOv2 locaux
 
-Le nombre demandé est un maximum : BestShotAI ne retient pas volontairement une image
-sous le seuil de qualité afin de remplir un quota. La configuration limite aussi par
-défaut chaque scène à trois images pour conserver de la diversité.
-
-## Résultats d'export
-
-```text
-photos/
-  vacances_0001.jpg
-  vacances_0002.jpg
-  manifest.json
-```
-
-`manifest.json` conserve, pour chaque export, le chemin de la source, le timestamp,
-l'index de frame, la scène et le détail complet des scores. Pour exporter en PNG :
+Le provider initial est DINOv2 ViT-S/14 (`facebook/dinov2-small`). Son téléchargement est
+explicite ; l'inférence suivante est limitée aux fichiers locaux et n'exécute pas de code
+distant.
 
 ```bash
-bestshot extract "$VIDEO" --count 30 --output ./photos-png --format png
+bestshot models download embedding
+bestshot embeddings "$VIDEO"
 ```
 
-La qualité JPEG, l'échantillonnage, les seuils de score et les limites de sélection sont
-configurables dans [`config/default.yaml`](config/default.yaml).
+DINOv2 est entièrement frozen (`eval`, aucun gradient) et utilise CUDA lorsqu'elle est
+disponible, sinon le CPU. `embeddings` ne convertit en RGB pour DINOv2 que les candidates
+absentes du cache. Les vecteurs L2 normalisés sont stockés dans `.bestshot/embeddings`, avec
+une clé qui contient l'identité de la vidéo, la frame et la version du modèle. Les previews
+réduits des seules candidates sont conservés hors SQLite dans `.bestshot/dataset/previews`
+pour la revue locale ; aucune frame 4K ou image n'est envoyée sur Internet.
 
-Le dépôt prévu pour les aperçus de candidates se règle avec
-`candidate_extraction.candidate_repository_dir` (par défaut `.bestshot/candidates`).
-La commande `bestshot candidates "$VIDEO"` y crée un sous-dossier par vidéo avec les
-aperçus JPEG réduits et un `manifest.json`. Les commandes d'analyse gardent leurs
-candidates en flux et ne les exportent pas automatiquement.
+Les réglages sont dans [`config/default.yaml`](config/default.yaml) :
+`personal_pipeline.presampling` pour les fenêtres temporelles et `embedding_model` pour
+le backbone, ses poids et son cache.
 
-## Visages et esthétique (optionnels)
+## Dataset local de préférences et ranking personnel
 
-La détection de visages MediaPipe ne fait aucune reconnaissance de personne. Son modèle
-reste local ; tant que `models/face_landmarker.task` n'est pas présent, la sélection et
-l'export continuent simplement avec le profil « sans visage ». Pour activer cette
-analyse, placez un fichier MediaPipe Face Landmarker `.task` obtenu séparément dans ce
-chemin (ou modifiez `face_scoring.model_path` dans la configuration).
+Le dataset SQLite local est créé à la demande dans `.bestshot/dataset/bestshot.db`. Il
+contient les vidéos, candidates, références aux previews/embeddings et préférences
+pairwise. SQLite ne contient aucun blob image ni frame 4K.
 
-Le score esthétique est également facultatif. L'adaptateur utilise le modèle local
-[`rsinema/aesthetic-scorer`](https://huggingface.co/rsinema/aesthetic-scorer), basé sur
-CLIP ViT-B/32 et entraîné sur PARA. BestShotAI charge uniquement son `state_dict` avec
-`weights_only=True` et reconstruit localement l'architecture : aucun code distant du
-dépôt n'est exécuté. Sans modèle, la commande continue avec une valeur neutre et indique
-son état :
+Les anciens labels `KEEP`, `REJECT` et `SKIP` restent compatibles mais ne sont plus le
+signal d'apprentissage par défaut. Le ranking personnel utilise `FIRST`, `SECOND`, `EQUAL`
+et `SKIP` : ce dernier est une absence d'information et n'est jamais converti en rejet.
 
 ```bash
-bestshot models
-bestshot analyse "$VIDEO" --aesthetic
+bestshot dataset stats
+bestshot dataset videos
+bestshot dataset reset-labels
 ```
 
-Pour l'activer, installez l'extra puis lancez le téléchargement explicite. Cette seule
-commande récupère des poids de modèle ; elle ne transmet jamais vos vidéos ou images.
+`reset-labels` ne supprime ni les vidéos ni les candidates : il remet seulement tous les
+labels à `SKIP`.
 
-Si le dépôt de modèle demande une authentification Hugging Face, exportez votre jeton
-dans le terminal. Le jeton n'est jamais enregistré par BestShotAI : la configuration ne
-contient que le nom de cette variable (`HUGGINGFACE_TOKEN`).
+Après l'ingestion locale, générez puis comparez des paires. La fenêtre PySide6 est
+optionnelle (`pip install -e ".[desktop]"), et les raccourcis sont `←`, `→`, `Espace`,
+`Échap`.
 
 ```bash
-export HUGGINGFACE_TOKEN="votre_jeton_huggingface"
-pip install -e ".[dev,aesthetic]"
-bestshot models download aesthetic
-bestshot analyse "$VIDEO" --aesthetic
+bestshot preferences generate "$VIDEO"
+bestshot preferences review "$VIDEO"
+bestshot preferences stats
+bestshot train-ranking
+bestshot ranking-score ./photo.jpg
 ```
 
-Les poids sont mis en cache dans `.bestshot/models/aesthetic`. CLIP utilise CUDA si elle
-est disponible, sinon le CPU. Le score esthétique reste plafonné à 35 % du score global
-par défaut. La section `aesthetic_model` de la configuration permet de modifier le dépôt,
-le nom de fichier ou la plage de sortie (par défaut, `0` à `5`).
-## Vérification locale
+Seule une tête linéaire est entraînée ; DINOv2 reste frozen. Chaque entraînement écrit un
+nouvel artefact dans `.bestshot/models/personal/model-XXXX/` et met à jour
+`.bestshot/models/personal/current.json`, sans écraser un modèle précédent. Consultez le
+[guide du ranking personnel](docs/PERSONAL_RANKING.md).
 
-Pour vérifier l'installation :
+## Vérification
 
 ```bash
 ruff check .
@@ -168,12 +102,5 @@ mypy src
 pytest
 ```
 
-Validation effectuée le 24 août 2026 avec FFmpeg/ffprobe locaux et une vidéo synthétique
-locale : inspection, scènes, candidates, analyse technique, analyse esthétique en mode
-fallback, sélection et export JPEG ont tous été exécutés. L'export a produit 3 JPEG
-nativement en 640 × 360 et un manifeste ; l'export PNG a aussi produit une image native
-640 × 360. Le traitement par lot de deux vidéos locales a aussi été validé. Les 65 tests
-automatisés passent.
-
-Consultez également [l'architecture](docs/ARCHITECTURE.md) et le guide contributeur
+Consultez [l'architecture V2](docs/ARCHITECTURE_V2.md) et le guide contributeur
 [AGENTS.md](AGENTS.md).
