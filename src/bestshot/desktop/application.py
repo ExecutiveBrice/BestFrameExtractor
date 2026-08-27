@@ -889,9 +889,25 @@ def _create_candidate_labeling_service() -> CandidateLabelingService:
 
 
 def _create_ai_selection_service() -> LabelDrivenSelectionService:
-    """Assemble la sélection locale DINO + tête de labels dans le worker Qt dédié."""
+    """Assemble l'inférence IA sans ingérer les vidéos sélectionnées au dataset."""
+    presampling_settings = load_presampling_settings()
+    embedding_settings = load_embedding_settings()
     dataset_settings = load_dataset_settings()
-    return LabelDrivenSelectionService(SQLiteDatasetRepository(dataset_settings.database_path))
+    embedder = VideoEmbeddingRunner(
+        CandidateGenerator(
+            TemporalSampler(PyAVTemporalSamplingBackend(), presampling_settings),
+            SharpnessRanker(),
+            presampling_settings,
+        ),
+        PyAVCandidatePreviewReader(),
+        DINOv2EmbeddingProvider(embedding_settings),
+        EmbeddingCache(embedding_settings.embedding_cache_dir),
+        presampling_settings.analysis_max_width,
+    )
+    return LabelDrivenSelectionService(
+        SQLiteDatasetRepository(dataset_settings.database_path),
+        embedder,
+    )
 
 
 def _qt() -> Any:

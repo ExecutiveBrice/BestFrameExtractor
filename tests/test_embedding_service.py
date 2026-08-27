@@ -126,3 +126,25 @@ def test_runner_exports_the_presampled_candidates_beside_the_video(tmp_path: Pat
     assert exporter.requests == [
         (video, (2, 8), tmp_path / "bestshot-candidates"),
     ]
+
+
+def test_embed_candidates_does_not_ingest_the_video_or_create_previews(tmp_path: Path) -> None:
+    video = tmp_path / "selection-only.mp4"
+    video.write_bytes(b"video")
+    runner = VideoEmbeddingRunner(
+        FakeCandidateGenerator((_candidate(2), _candidate(8))),  # type: ignore[arg-type]
+        FakePreviewReader(),
+        FakeEmbeddingProvider(),
+        EmbeddingCache(tmp_path / "cache"),
+        analysis_max_width=640,
+    )
+
+    result = runner.embed_candidates(video)
+
+    assert [(item.frame_index, item.embedding) for item in result.candidates] == [
+        (2, (0.6, 0.8)),
+        (8, (0.6, 0.8)),
+    ]
+    assert result.report.computed_count == 2
+    assert not (tmp_path / "dataset.sqlite").exists()
+    assert not (tmp_path / "previews").exists()

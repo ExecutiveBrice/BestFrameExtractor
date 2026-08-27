@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from bestshot.dataset.repository import DatasetRepository, FrameRecord
-from bestshot.embedding.cache import EmbeddingCache
-from bestshot.infrastructure.selection_export import PyAVSelectedFrameExporter
+from bestshot.dataset.repository import DatasetRepository
+from bestshot.infrastructure.selection_export import ExportableFrame, PyAVSelectedFrameExporter
+from bestshot.services.embeddings import CandidateEmbeddingResult
 from bestshot.services.personal_label_model import (
     LabelModelTrainingReport,
-    PersonalLabelModel,
     PersonalLabelModelTrainer,
 )
 from bestshot.services.selection import SELECTION_DIRECTORY_NAME
@@ -31,20 +31,32 @@ class LabelSelectionResult:
 
 class FrameExporter(Protocol):
     def export(
-        self, video_path: Path, frames: tuple[FrameRecord, ...], destination_directory: Path
+        self, video_path: Path, frames: Sequence[ExportableFrame], destination_directory: Path
     ) -> tuple[Path, ...]: ...
 
 
+class CandidateEmbedder(Protocol):
+    """Prépare une vidéo pour l'inférence sans l'ajouter au dataset d'apprentissage."""
+
+    def embed_candidates(self, video_path: Path) -> CandidateEmbeddingResult: ...
+
+
+class KeepPredictor(Protocol):
+    def predict_keep(self, embedding: tuple[float, ...]) -> bool: ...
+
+
 class LabelDrivenSelectionService:
-    """Entraîne la tête personnelle et exporte toute candidate prédite KEEP."""
+    """Entraîne la tête globale puis sélectionne des vidéos sans les ingérer au dataset."""
 
     def __init__(
         self,
         repository: DatasetRepository,
+        candidate_embedder: CandidateEmbedder,
         exporter: FrameExporter | None = None,
         trainer: PersonalLabelModelTrainer | None = None,
     ) -> None:
         self._repository = repository
+        self._candidate_embedder = candidate_embedder
         self._exporter = exporter or PyAVSelectedFrameExporter()
         self._trainer = trainer or PersonalLabelModelTrainer(repository)
 
@@ -53,17 +65,14 @@ class LabelDrivenSelectionService:
         return report
 
     def select_video(self, video_path: Path) -> LabelSelectionResult:
-        model = getattr(self, "_model", None)
-        if not isinstance(model, PersonalLabelModel):
+        model: KeepPredictor | None = getattr(self, "_model", None)
+        if model is None:
             raise LabelSelectionError("Le modèle de labels doit être entraîné avant la sélection.")
-        video = self._repository.get_video_by_source_path(video_path)
-        if video is None or video.id is None:
-            raise LabelSelectionError("Vidéo absente du dataset : lancez d'abord l'analyse locale.")
-        frames = self._repository.list_frames_for_video(video.id)
+        prepared = self._candidate_embedder.embed_candidates(video_path)
         selected = tuple(
-            frame
-            for frame in frames
-            if model.predict_keep(EmbeddingCache.load_reference(frame.embedding_reference))
+            candidate
+            for candidate in prepared.candidates
+            if model.predict_keep(candidate.embedding)
         )
         exported = self._exporter.export(
             video_path, selected, video_path.resolve().parent / SELECTION_DIRECTORY_NAME

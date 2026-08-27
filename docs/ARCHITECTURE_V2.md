@@ -47,10 +47,12 @@ DINOv2, cache et SQLite s'exécutent dans un worker Qt ; seuls les signaux de pr
 modifient l'interface.
 
 L'onglet **Sélection IA** ne contient qu'un choix de dossier vidéo et le lancement du
-traitement. Son worker entraîne une couche linéaire binaire sur les embeddings associés aux
-labels `KEEP` et `REJECT` — `SKIP` est exclu — puis exporte les candidates prédites `KEEP`
-dans `bestshot-selection/`. DINOv2 n'est pas chargé par cet entraînement et ses poids ne
-sont jamais modifiés.
+traitement. Son worker entraîne une couche linéaire binaire sur tous les embeddings du
+dataset associés aux labels `KEEP` et `REJECT` — `SKIP` est exclu — puis présample et
+embedde les vidéos choisies pour l'inférence. Ces vidéos, leurs candidates et leurs aperçus
+ne sont pas ajoutés à SQLite : seules les candidates prédites `KEEP` sont exportées dans
+`bestshot-selection/`. DINOv2 n'est pas chargé par l'entraînement et ses poids ne sont
+jamais modifiés.
 
 ## Données locales
 

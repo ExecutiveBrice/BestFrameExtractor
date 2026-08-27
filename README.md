@@ -67,9 +67,11 @@ l'analyse. Il affiche les aperçus locaux et permet de les marquer **Accepter**,
 l'interface ; aucun aperçu n'est envoyé hors de la machine.
 
 L'onglet **Sélection IA** choisit un dossier de vidéos puis lance le traitement. Une tête
-linéaire locale est entraînée sur les embeddings DINO déjà calculés et les seuls labels
-`KEEP`/`REJECT` ; DINOv2 reste entièrement frozen. Les candidates prédites `KEEP` sont
-exportées dans `bestshot-selection/`, à côté de chaque vidéo source.
+linéaire locale est entraînée sur tous les embeddings DINO déjà présents dans le dataset
+et les seuls labels `KEEP`/`REJECT` ; DINOv2 reste entièrement frozen. Les vidéos de cet
+onglet sont présamplées et embedées pour l'inférence sans être ajoutées au dataset, puis
+leurs candidates prédites `KEEP` sont exportées dans `bestshot-selection/`, à côté de
+chaque vidéo source.
 
 ## Vérification
 

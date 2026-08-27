@@ -11,7 +11,7 @@ from bestshot.dataset.preview_cache import PreviewCache
 from bestshot.dataset.repository import DatasetRepository, FrameRecord
 from bestshot.dataset.sqlite_repository import video_record_from_path
 from bestshot.embedding.cache import EmbeddingCache, EmbeddingCacheKey
-from bestshot.embedding.provider import ImageEmbeddingProvider
+from bestshot.embedding.provider import EmbeddingVector, ImageEmbeddingProvider
 from bestshot.infrastructure.embedding_frames import CandidatePreviewReader, EmbeddingFrameReadError
 from bestshot.sampling.candidate_generator import CandidateGenerator, PresampledCandidate
 
@@ -42,6 +42,24 @@ class EmbeddingReport:
     exported_count: int = 0
 
 
+@dataclass(frozen=True, slots=True)
+class EmbeddedCandidate:
+    """Candidate transitoire prête pour l'inférence, sans écriture dans SQLite."""
+
+    timestamp: float
+    frame_index: int
+    sharpness: float
+    embedding: EmbeddingVector
+
+
+@dataclass(frozen=True, slots=True)
+class CandidateEmbeddingResult:
+    """Embeddings de candidates d'une vidéo, utilisables sans les ingérer au dataset."""
+
+    candidates: tuple[EmbeddedCandidate, ...]
+    report: EmbeddingReport
+
+
 class VideoEmbeddingRunner:
     """Calcule les seuls embeddings absents du cache persistant local."""
 
@@ -69,8 +87,7 @@ class VideoEmbeddingRunner:
 
     def run(self, video_path: Path) -> EmbeddingReport:
         """Présélectionne, relit puis embedde localement les candidates non mises en cache."""
-        started = perf_counter()
-        candidates = self._candidate_generator.generate(video_path).candidates
+        candidates, keys, report = self._embed_candidates(video_path)
         dataset_video = (
             self._dataset_repository.upsert_video(video_record_from_path(video_path))
             if self._dataset_repository is not None
@@ -79,6 +96,62 @@ class VideoEmbeddingRunner:
         if dataset_video is not None and dataset_video.id is None:
             raise RuntimeError("La vidéo du dataset n'a pas reçu d'identifiant.")
         dataset_video_id = dataset_video.id if dataset_video is not None else None
+        stored_frames: tuple[FrameRecord, ...] = ()
+        if dataset_video_id is not None and self._preview_cache is not None:
+            stored_frames = self._store_dataset_candidates(
+                video_path, candidates, keys, dataset_video_id
+            )
+        exported_count = 0
+        if self._candidate_exporter is not None and stored_frames:
+            exported_count = len(
+                self._candidate_exporter.export(
+                    video_path,
+                    stored_frames,
+                    video_path.resolve().parent / CANDIDATE_EXPORT_DIRECTORY_NAME,
+                )
+            )
+
+        return EmbeddingReport(
+            device=report.device,
+            model_name=report.model_name,
+            computed_count=report.computed_count,
+            cached_count=report.cached_count,
+            elapsed_seconds=report.elapsed_seconds,
+            exported_count=exported_count,
+        )
+
+    def embed_candidates(self, video_path: Path) -> CandidateEmbeddingResult:
+        """Prépare des candidates pour l'inférence sans les ajouter au dataset global.
+
+        Les vecteurs peuvent être conservés dans le cache local d'embeddings, mais aucune
+        vidéo, candidate, preview ou décision n'est créée dans SQLite.
+        """
+        candidates, keys, report = self._embed_candidates(video_path)
+        return CandidateEmbeddingResult(
+            tuple(
+                EmbeddedCandidate(
+                    timestamp=candidate.timestamp,
+                    frame_index=candidate.frame_index,
+                    sharpness=candidate.sharpness,
+                    embedding=self._load_cached_embedding(keys[candidate.frame_index]),
+                )
+                for candidate in candidates
+            ),
+            report,
+        )
+
+    def _load_cached_embedding(self, key: EmbeddingCacheKey) -> EmbeddingVector:
+        embedding = self._cache.get(key)
+        if embedding is None:
+            raise EmbeddingFrameReadError("Une candidate n'a pas reçu son embedding local.")
+        return embedding
+
+    def _embed_candidates(
+        self, video_path: Path
+    ) -> tuple[tuple[PresampledCandidate, ...], dict[int, EmbeddingCacheKey], EmbeddingReport]:
+        """Présélectionne et garantit un embedding local pour chaque candidate."""
+        started = perf_counter()
+        candidates = self._candidate_generator.generate(video_path).candidates
         keys: dict[int, EmbeddingCacheKey] = {}
         missing: list[tuple[PresampledCandidate, EmbeddingCacheKey]] = []
         cached_count = 0
@@ -115,29 +188,12 @@ class VideoEmbeddingRunner:
             raise EmbeddingFrameReadError(
                 f"Frames candidates introuvables dans la vidéo : {missing_indexes}"
             )
-
-        stored_frames: tuple[FrameRecord, ...] = ()
-        if dataset_video_id is not None and self._preview_cache is not None:
-            stored_frames = self._store_dataset_candidates(
-                video_path, candidates, keys, dataset_video_id
-            )
-        exported_count = 0
-        if self._candidate_exporter is not None and stored_frames:
-            exported_count = len(
-                self._candidate_exporter.export(
-                    video_path,
-                    stored_frames,
-                    video_path.resolve().parent / CANDIDATE_EXPORT_DIRECTORY_NAME,
-                )
-            )
-
-        return EmbeddingReport(
+        return candidates, keys, EmbeddingReport(
             device=self._provider.device,
             model_name=self._provider.model_name,
             computed_count=computed_count,
             cached_count=cached_count,
             elapsed_seconds=perf_counter() - started,
-            exported_count=exported_count,
         )
 
     def _store_dataset_candidates(

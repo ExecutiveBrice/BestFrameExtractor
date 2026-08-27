@@ -3,10 +3,20 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Protocol
 from uuid import uuid4
 
-from bestshot.dataset.repository import FrameRecord
+
+class ExportableFrame(Protocol):
+    """Information minimale nécessaire à l'export d'une frame vidéo."""
+
+    @property
+    def timestamp(self) -> float: ...
+
+    @property
+    def frame_index(self) -> int: ...
 
 
 class SelectedFrameExportError(RuntimeError):
@@ -19,7 +29,7 @@ class PyAVSelectedFrameExporter:
     def export(
         self,
         video_path: Path,
-        frames: tuple[FrameRecord, ...],
+        frames: Sequence[ExportableFrame],
         destination_directory: Path,
     ) -> tuple[Path, ...]:
         if not frames:
@@ -58,7 +68,7 @@ class PyAVSelectedFrameExporter:
         return tuple(exported[frame.frame_index] for frame in frames)
 
 
-def selected_frame_path(destination_directory: Path, video_path: Path, frame: FrameRecord) -> Path:
+def selected_frame_path(destination_directory: Path, video_path: Path, frame: ExportableFrame) -> Path:
     """Construit un nom stable et lisible sans écraser une autre vidéo du dossier."""
     timestamp_milliseconds = round(frame.timestamp * 1_000)
     source_format = video_path.suffix.lower().removeprefix(".") or "video"
