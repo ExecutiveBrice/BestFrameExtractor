@@ -5,6 +5,9 @@ from __future__ import annotations
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 
+from bestshot.dataset.preview_cache import PreviewCache
+from bestshot.dataset.repository import FrameRecord
+from bestshot.dataset.sqlite_repository import SQLiteDatasetRepository
 from bestshot.domain.preview_image import PreviewImage
 from bestshot.embedding.cache import EmbeddingCache
 from bestshot.embedding.provider import EmbeddingVector
@@ -53,6 +56,22 @@ class FakeEmbeddingProvider:
         return (3.0, 4.0)
 
 
+class FakeCandidateExporter:
+    def __init__(self) -> None:
+        self.requests: list[tuple[Path, tuple[int, ...], Path]] = []
+
+    def export(
+        self,
+        video_path: Path,
+        frames: tuple[FrameRecord, ...],
+        destination_directory: Path,
+    ) -> tuple[Path, ...]:
+        self.requests.append(
+            (video_path, tuple(frame.frame_index for frame in frames), destination_directory)
+        )
+        return tuple(destination_directory / f"{frame.frame_index}.jpg" for frame in frames)
+
+
 def _candidate(index: int) -> PresampledCandidate:
     return PresampledCandidate(
         timestamp=index / 10.0,
@@ -84,3 +103,26 @@ def test_runner_uses_persistent_cache_before_calling_provider(tmp_path: Path) ->
     assert provider.calls == 2
     assert reader.requested_indexes == [[2, 8], []]
     assert "Embeddings calculés : 0" in format_embedding_report(second)
+
+
+def test_runner_exports_the_presampled_candidates_beside_the_video(tmp_path: Path) -> None:
+    video = tmp_path / "family.mp4"
+    video.write_bytes(b"video")
+    exporter = FakeCandidateExporter()
+    runner = VideoEmbeddingRunner(
+        FakeCandidateGenerator((_candidate(2), _candidate(8))),  # type: ignore[arg-type]
+        FakePreviewReader(),
+        FakeEmbeddingProvider(),
+        EmbeddingCache(tmp_path / "cache"),
+        analysis_max_width=640,
+        dataset_repository=SQLiteDatasetRepository(tmp_path / "dataset.sqlite"),
+        preview_cache=PreviewCache(tmp_path / "previews"),
+        candidate_exporter=exporter,
+    )
+
+    report = runner.run(video)
+
+    assert report.exported_count == 2
+    assert exporter.requests == [
+        (video, (2, 8), tmp_path / "bestshot-candidates"),
+    ]

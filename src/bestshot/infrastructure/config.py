@@ -13,6 +13,8 @@ from bestshot.embedding.dinov2 import DINOv2Settings
 from bestshot.learning.pair_generator import PairGenerationSettings
 from bestshot.learning.ranking_trainer import PersonalRankingSettings
 from bestshot.sampling.temporal_sampler import PresamplingSettings
+from bestshot.services.photo_pool import PhotoPoolSettings
+from bestshot.services.selection import SelectionSettings
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[3] / "config" / "default.yaml"
 
@@ -79,6 +81,11 @@ def load_pair_generation_settings(config_path: Path = DEFAULT_CONFIG_PATH) -> Pa
         temporal_window_seconds=_positive_float(values, "temporal_window_seconds"),
         max_pairs_per_group=_positive_int(values, "max_pairs_per_group"),
         seed=_non_negative_int(values, "seed"),
+        photo_pool_coverage_segment_count=_positive_int(values, "photo_pool_coverage_segment_count"),
+        photo_pool_maximum_cosine_similarity=_ratio_inclusive(
+            values, "photo_pool_maximum_cosine_similarity"
+        ),
+        photo_pool_minimum_frame_gap=_non_negative_int(values, "photo_pool_minimum_frame_gap"),
     )
 
 
@@ -101,6 +108,37 @@ def load_personal_ranking_settings(config_path: Path = DEFAULT_CONFIG_PATH) -> P
         equality_margin=_non_negative_float(values, "equality_margin"),
         seed=_non_negative_int(values, "seed"),
     )
+
+
+def load_selection_settings(config_path: Path = DEFAULT_CONFIG_PATH) -> SelectionSettings:
+    """Charge la déduplication locale appliquée seulement à l'export final."""
+    root = _load_root(config_path)
+    values = _mapping(root.get("personal_selection"))
+    if not values:
+        raise ConfigurationError("Section personal_selection absente de la configuration.")
+    maximum_cosine_similarity = values.get("maximum_cosine_similarity")
+    if (
+        not isinstance(maximum_cosine_similarity, (int, float))
+        or not -1.0 <= float(maximum_cosine_similarity) <= 1.0
+    ):
+        raise ConfigurationError(
+            "personal_selection.maximum_cosine_similarity doit être compris entre -1 et 1."
+        )
+    return SelectionSettings(
+        minimum_time_separation_seconds=_non_negative_float(
+            values, "minimum_time_separation_seconds"
+        ),
+        maximum_cosine_similarity=float(maximum_cosine_similarity),
+    )
+
+
+def load_photo_pool_settings(config_path: Path = DEFAULT_CONFIG_PATH) -> PhotoPoolSettings:
+    """Charge la limite d'aperçu du corpus photo d'apprentissage."""
+    root = _load_root(config_path)
+    values = _mapping(root.get("personal_learning"))
+    if not values:
+        raise ConfigurationError("Section personal_learning absente de la configuration.")
+    return PhotoPoolSettings(preview_max_width=_positive_int(values, "photo_pool_preview_max_width"))
 
 
 def _load_root(config_path: Path) -> Mapping[str, object]:
@@ -150,6 +188,13 @@ def _ratio(values: Mapping[str, object], key: str) -> float:
     if isinstance(value, (int, float)) and 0 <= float(value) < 1:
         return float(value)
     raise ConfigurationError(f"Ratio [0, 1[ attendu pour {key}.")
+
+
+def _ratio_inclusive(values: Mapping[str, object], key: str) -> float:
+    value = values.get(key)
+    if isinstance(value, (int, float)) and -1 <= float(value) <= 1:
+        return float(value)
+    raise ConfigurationError(f"Valeur [-1, 1] attendue pour {key}.")
 
 
 def _path(values: Mapping[str, object], key: str) -> Path:

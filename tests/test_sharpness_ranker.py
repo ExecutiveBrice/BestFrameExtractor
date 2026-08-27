@@ -41,3 +41,15 @@ def test_ranker_applies_no_minimum_sharpness_threshold() -> None:
 
     assert [item.frame.frame_index for item in ranked] == [0, 1]
     assert [item.sharpness for item in ranked] == [0.0, 0.0]
+
+
+def test_ranker_handles_a_single_pixel_frame_without_external_cv_backend() -> None:
+    frame = AnalysisFrame(
+        timestamp=0.0,
+        frame_index=0,
+        source_width=1,
+        source_height=1,
+        grayscale=GrayscaleImage(width=1, height=1, gray_bytes=b"\xff"),
+    )
+
+    assert SharpnessRanker().measure(frame) == 0.0

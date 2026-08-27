@@ -8,6 +8,7 @@ from pathlib import Path
 from bestshot.dataset.labels import FrameLabel
 from bestshot.dataset.repository import FrameRecord, TrainingModel
 from bestshot.dataset.sqlite_repository import SQLiteDatasetRepository, video_record_from_path
+from bestshot.domain.preferences import PairwisePreference, PreferenceChoice
 
 
 def test_sqlite_repository_migrates_and_keeps_skip_as_null_without_image_blobs(tmp_path: Path) -> None:
@@ -38,7 +39,7 @@ def test_sqlite_repository_migrates_and_keeps_skip_as_null_without_image_blobs(t
 
     assert label is None
     assert all("BLOB" not in column_type.upper() for column_type in column_types.values())
-    assert migrations == [(1,), (2,)]
+    assert migrations == [(1,), (2,), (3,)]
 
     repository.set_frame_label(frame.id, FrameLabel.REJECT)
     refreshed = repository.upsert_frame(
@@ -57,6 +58,31 @@ def test_sqlite_repository_migrates_and_keeps_skip_as_null_without_image_blobs(t
     assert repository.stats().reject_count == 1
     assert repository.reset_labels() == 1
     assert repository.stats().skip_count == 1
+
+
+def test_sqlite_repository_persists_learning_pool_and_resets_only_preferences(tmp_path: Path) -> None:
+    video_path = tmp_path / "family.mp4"
+    pool_path = tmp_path / "bestshot-candidates"
+    video_path.write_bytes(b"local-video-content")
+    pool_path.mkdir()
+    repository = SQLiteDatasetRepository(tmp_path / "bestshot.db")
+    video = repository.upsert_video(video_record_from_path(video_path))
+    assert video.id is not None
+    first = repository.upsert_frame(
+        FrameRecord(video.id, 0.0, 0, "first.jpg", 0.0, "first.json")
+    )
+    second = repository.upsert_frame(
+        FrameRecord(video.id, 1.0, 1, "second.jpg", 0.0, "second.json")
+    )
+    repository.save_preference(
+        PairwisePreference(first.id or 0, second.id or 0, PreferenceChoice.FIRST)
+    )
+    repository.set_active_learning_pool(pool_path)
+
+    assert repository.get_active_learning_pool() == pool_path.resolve()
+    assert repository.reset_preferences() == 1
+    assert repository.preference_stats().total_count == 0
+    assert len(repository.list_frames_for_video(video.id)) == 2
 
 
 def test_sqlite_repository_lists_videos_and_reserves_training_model_metadata(tmp_path: Path) -> None:

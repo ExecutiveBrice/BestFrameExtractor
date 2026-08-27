@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Literal
 
-import cv2
 import numpy as np
 
 from bestshot.sampling.temporal_sampler import AnalysisFrame
@@ -43,4 +43,23 @@ class SharpnessRanker:
         if image.width <= 0 or image.height <= 0 or len(image.gray_bytes) != expected_size:
             raise ValueError("Le buffer de niveaux de gris ne correspond pas aux dimensions annoncées.")
         pixels = np.frombuffer(image.gray_bytes, dtype=np.uint8).reshape((image.height, image.width))
-        return float(cv2.Laplacian(pixels, cv2.CV_64F).var())
+        return _laplacian_variance(pixels)
+
+
+def _laplacian_variance(pixels: np.ndarray) -> float:
+    """Calcule la variance du Laplacien 3×3 sans charger OpenCV.
+
+    La bordure réfléchie évite d'introduire artificiellement un contraste sur
+    les bords. La valeur reste une mesure brute, utilisée seulement pour
+    ordonner les frames de la fenêtre en cours.
+    """
+    border_mode: Literal["reflect", "edge"] = "reflect" if min(pixels.shape) > 1 else "edge"
+    padded = np.pad(pixels.astype(np.float64, copy=False), 1, mode=border_mode)
+    laplacian = (
+        padded[:-2, 1:-1]
+        + padded[2:, 1:-1]
+        + padded[1:-1, :-2]
+        + padded[1:-1, 2:]
+        - 4.0 * padded[1:-1, 1:-1]
+    )
+    return float(laplacian.var())

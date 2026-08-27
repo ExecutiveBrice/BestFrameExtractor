@@ -5,8 +5,6 @@ from pathlib import Path
 from bestshot.infrastructure.config import (
     load_dataset_settings,
     load_embedding_settings,
-    load_pair_generation_settings,
-    load_personal_ranking_settings,
     load_presampling_settings,
 )
 
@@ -33,13 +31,3 @@ def test_load_dataset_settings_reads_local_defaults() -> None:
 
     assert settings.database_path == Path(".bestshot/dataset/bestshot.db")
     assert settings.preview_cache_dir == Path(".bestshot/dataset/previews")
-
-
-def test_load_pairwise_and_ranking_defaults() -> None:
-    pair_generation = load_pair_generation_settings()
-    ranking = load_personal_ranking_settings()
-
-    assert pair_generation.temporal_window_seconds == 5.0
-    assert pair_generation.max_pairs_per_group == 10
-    assert ranking.equal_loss_weight == 0.5
-    assert ranking.equality_margin == 0.05

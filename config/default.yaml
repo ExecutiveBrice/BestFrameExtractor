@@ -20,19 +20,3 @@ dataset:
   database_path: .bestshot/dataset/bestshot.db
   # Les aperçus réduits restent hors de SQLite et sont référencés par les frames.
   preview_cache_dir: .bestshot/dataset/previews
-
-pair_generation:
-  temporal_window_seconds: 5
-  max_pairs_per_group: 10
-  seed: 42
-
-personal_ranking:
-  model_type: linear
-  equal_loss_weight: 0.5
-  learning_rate: 0.001
-  epochs: 100
-  weight_decay: 0.0001
-  validation_ratio: 0.20
-  early_stopping_patience: 10
-  equality_margin: 0.05
-  seed: 42

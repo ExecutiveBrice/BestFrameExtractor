@@ -1,72 +1,56 @@
 # BestShotAI V2
 
-BestShotAI V2 produit localement des candidates stables depuis une vidéo, puis calcule des
-embeddings visuels DINOv2 pour les candidates. Les vidéos, les aperçus et les embeddings
-restent sur la machine : aucune image n'est envoyée sur Internet.
+BestShotAI analyse localement les vidéos et sélectionne des candidates régulières : dans
+chaque fenêtre temporelle, il conserve les frames les plus nettes relativement à leurs
+voisines. Les vidéos, aperçus et embeddings DINOv2 restent sur la machine.
 
 ## Installation
 
-Pré-requis : Python 3.12 et `ffprobe` dans le `PATH`.
+Python 3.12, `ffprobe`, puis :
 
 ```bash
 python3.12 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
-pip install -e ".[dev,embedding]"
-bestshot --help
+pip install -e ".[dev,embedding,desktop]"
 ```
 
 ## Utilisation
 
-Les vidéos restent à leur emplacement d'origine. Définissez simplement leur chemin :
-
-```bash
-VIDEO="$HOME/Movies/vacances.mp4"
-```
-
-Le présampling décode séquentiellement la vidéo, analyse environ 8 frames/s et conserve
-les deux frames les plus nettes de chaque fenêtre d'une seconde. La netteté sert
-uniquement à classer les frames de leur propre fenêtre : elle n'est jamais un seuil de
-qualité ni une comparaison entre vidéos.
-
-```bash
-bestshot presample "$VIDEO"
-```
-
-La commande affiche la durée, les frames décodées, les frames analysées, les candidates
-générées et leur densité par minute. Elle ne crée aucun fichier.
-
-## Embeddings DINOv2 locaux
-
-Le provider initial est DINOv2 ViT-S/14 (`facebook/dinov2-small`). Son téléchargement est
-explicite ; l'inférence suivante est limitée aux fichiers locaux et n'exécute pas de code
-distant.
+Téléchargez une fois le modèle local, puis utilisez l'interface pour choisir un dossier
+de vidéos et lancer le traitement :
 
 ```bash
 bestshot models download embedding
-bestshot embeddings "$VIDEO"
+bestshot desktop
+# ou : bestshot-gui
 ```
 
-DINOv2 est entièrement frozen (`eval`, aucun gradient) et utilise CUDA lorsqu'elle est
-disponible, sinon le CPU. `embeddings` ne convertit en RGB pour DINOv2 que les candidates
-absentes du cache. Les vecteurs L2 normalisés sont stockés dans `.bestshot/embeddings`, avec
-une clé qui contient l'identité de la vidéo, la frame et la version du modèle. Les previews
-réduits des seules candidates sont conservés hors SQLite dans `.bestshot/dataset/previews`
-pour la revue locale ; aucune frame 4K ou image n'est envoyée sur Internet.
+L'interface ne parcourt pas les sous-dossiers. Pour chaque vidéo, les candidates sont
+exportées en JPEG pleine résolution dans `bestshot-candidates/`, à côté de la vidéo
+source. Elles correspondent uniquement au présampling temporel V2 : aucune analyse de
+scène, de visage ou de qualité esthétique n'est appliquée.
 
-Les réglages sont dans [`config/default.yaml`](config/default.yaml) :
-`personal_pipeline.presampling` pour les fenêtres temporelles et `embedding_model` pour
-le backbone, ses poids et son cache.
+La ligne de commande reste disponible pour une vidéo :
 
-## Dataset local de préférences et ranking personnel
+```bash
+bestshot presample ./video.mp4
+bestshot embeddings ./video.mp4
+```
 
-Le dataset SQLite local est créé à la demande dans `.bestshot/dataset/bestshot.db`. Il
-contient les vidéos, candidates, références aux previews/embeddings et préférences
-pairwise. SQLite ne contient aucun blob image ni frame 4K.
+`embeddings` calcule DINOv2 seulement pour les candidates non présentes dans le cache
+local. DINOv2 reste frozen et l'inférence est limitée aux fichiers déjà téléchargés.
 
-Les anciens labels `KEEP`, `REJECT` et `SKIP` restent compatibles mais ne sont plus le
-signal d'apprentissage par défaut. Le ranking personnel utilise `FIRST`, `SECOND`, `EQUAL`
-et `SKIP` : ce dernier est une absence d'information et n'est jamais converti en rejet.
+## Dataset local de préférences
+
+Les vidéos analysées et leurs candidates sont indexées dans
+`.bestshot/dataset/bestshot.db`. SQLite ne contient jamais les pixels des frames : les
+aperçus et embeddings restent dans des caches locaux externes, référencés depuis la base.
+
+Chaque candidate conserve la vidéo source et son hash, le timestamp, l'index de frame, la
+netteté, ainsi que les références de preview et d'embedding. Son label est `KEEP`,
+`REJECT` ou `SKIP`. `SKIP` est enregistré comme absence de label et ne représente jamais
+un rejet.
 
 ```bash
 bestshot dataset stats
@@ -74,25 +58,18 @@ bestshot dataset videos
 bestshot dataset reset-labels
 ```
 
-`reset-labels` ne supprime ni les vidéos ni les candidates : il remet seulement tous les
-labels à `SKIP`.
+Le dataset prépare uniquement la collecte locale des préférences. Aucun modèle personnel
+n'est entraîné à ce stade.
 
-Après l'ingestion locale, générez puis comparez des paires. La fenêtre PySide6 est
-optionnelle (`pip install -e ".[desktop]"), et les raccourcis sont `←`, `→`, `Espace`,
-`Échap`.
+L'onglet **Apprentissage IA** ouvre un dossier `bestshot-candidates/` déjà créé par
+l'analyse. Il affiche les aperçus locaux et permet de les marquer **Accepter**,
+**Rejeter** ou **Passer**. Les écritures SQLite sont réalisées hors du thread de
+l'interface ; aucun aperçu n'est envoyé hors de la machine.
 
-```bash
-bestshot preferences generate "$VIDEO"
-bestshot preferences review "$VIDEO"
-bestshot preferences stats
-bestshot train-ranking
-bestshot ranking-score ./photo.jpg
-```
-
-Seule une tête linéaire est entraînée ; DINOv2 reste frozen. Chaque entraînement écrit un
-nouvel artefact dans `.bestshot/models/personal/model-XXXX/` et met à jour
-`.bestshot/models/personal/current.json`, sans écraser un modèle précédent. Consultez le
-[guide du ranking personnel](docs/PERSONAL_RANKING.md).
+L'onglet **Sélection IA** choisit un dossier de vidéos puis lance le traitement. Une tête
+linéaire locale est entraînée sur les embeddings DINO déjà calculés et les seuls labels
+`KEEP`/`REJECT` ; DINOv2 reste entièrement frozen. Les candidates prédites `KEEP` sont
+exportées dans `bestshot-selection/`, à côté de chaque vidéo source.
 
 ## Vérification
 
@@ -102,5 +79,4 @@ mypy src
 pytest
 ```
 
-Consultez [l'architecture V2](docs/ARCHITECTURE_V2.md) et le guide contributeur
-[AGENTS.md](AGENTS.md).
+Consultez [l'architecture V2](docs/ARCHITECTURE_V2.md) pour les invariants du pipeline.

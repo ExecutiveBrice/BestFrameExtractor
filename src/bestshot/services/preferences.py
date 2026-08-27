@@ -13,6 +13,7 @@ from bestshot.learning.pair_generator import (
     MixedPairSelectionStrategy,
     PairGenerationSettings,
     PairSelectionStrategy,
+    PhotoPoolCoveragePairSelectionStrategy,
     generate_pairs,
 )
 
@@ -28,6 +29,7 @@ def generate_video_preferences(
     strategy: PairSelectionStrategy | None = None,
     *,
     include_reviewed: bool = False,
+    return_all: bool = False,
 ) -> list[GeneratedPair]:
     """Propose des paires pour une vidéo déjà analysée par ``bestshot embeddings``."""
     video = repository.get_video_by_source_path(video_path)
@@ -55,6 +57,46 @@ def generate_video_preferences(
         settings,
         existing_pairs,
         include_reviewed=include_reviewed,
+        return_all=return_all,
+    )
+
+
+def generate_photo_pool_preferences(
+    repository: DatasetRepository,
+    directory: Path,
+    settings: PairGenerationSettings,
+    strategy: PairSelectionStrategy | None = None,
+    *,
+    include_reviewed: bool = False,
+    return_all: bool = False,
+) -> list[GeneratedPair]:
+    """Propose des paires diverses dans le temps depuis un pool photo déjà importé."""
+    pool = repository.get_video_by_source_path(directory)
+    if pool is None or pool.id is None:
+        raise PreferenceServiceError(
+            "Pool de photos absent du dataset : importez-le d'abord dans l'onglet Apprentissage."
+        )
+    records = repository.list_frames_for_video(pool.id)
+    if len(records) < 2:
+        raise PreferenceServiceError("Au moins deux photos avec embedding sont nécessaires.")
+    try:
+        frames = [
+            FrameEmbedding(frame, EmbeddingCache.load_reference(frame.embedding_reference))
+            for frame in records
+        ]
+    except RuntimeError as error:
+        raise PreferenceServiceError(str(error)) from error
+    existing_pairs = {
+        (preference.first_frame_id, preference.second_frame_id)
+        for preference in repository.list_preferences_for_video(pool.id)
+    }
+    return generate_pairs(
+        frames,
+        strategy or PhotoPoolCoveragePairSelectionStrategy(),
+        settings,
+        existing_pairs,
+        include_reviewed=include_reviewed,
+        return_all=return_all,
     )
 
 

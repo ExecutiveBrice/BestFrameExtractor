@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
+from typing import Protocol
 
 from bestshot.dataset.preview_cache import PreviewCache
 from bestshot.dataset.repository import DatasetRepository, FrameRecord
@@ -13,6 +14,20 @@ from bestshot.embedding.cache import EmbeddingCache, EmbeddingCacheKey
 from bestshot.embedding.provider import ImageEmbeddingProvider
 from bestshot.infrastructure.embedding_frames import CandidatePreviewReader, EmbeddingFrameReadError
 from bestshot.sampling.candidate_generator import CandidateGenerator, PresampledCandidate
+
+CANDIDATE_EXPORT_DIRECTORY_NAME = "bestshot-candidates"
+
+
+class CandidateFrameExporter(Protocol):
+    """Port d'export local des candidates V2 après leur ingestion."""
+
+    def export(
+        self,
+        video_path: Path,
+        frames: tuple[FrameRecord, ...],
+        destination_directory: Path,
+    ) -> tuple[Path, ...]:
+        """Écrit les frames candidates demandées à côté de leur vidéo source."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,6 +39,7 @@ class EmbeddingReport:
     computed_count: int
     cached_count: int
     elapsed_seconds: float
+    exported_count: int = 0
 
 
 class VideoEmbeddingRunner:
@@ -38,6 +54,7 @@ class VideoEmbeddingRunner:
         analysis_max_width: int,
         dataset_repository: DatasetRepository | None = None,
         preview_cache: PreviewCache | None = None,
+        candidate_exporter: CandidateFrameExporter | None = None,
     ) -> None:
         self._candidate_generator = candidate_generator
         self._preview_reader = preview_reader
@@ -46,6 +63,7 @@ class VideoEmbeddingRunner:
         self._analysis_max_width = analysis_max_width
         self._dataset_repository = dataset_repository
         self._preview_cache = preview_cache
+        self._candidate_exporter = candidate_exporter
         if (dataset_repository is None) != (preview_cache is None):
             raise ValueError("Le repository et le cache d'aperçus doivent être fournis ensemble.")
 
@@ -86,16 +104,32 @@ class VideoEmbeddingRunner:
         ):
             frame_index = candidate_preview.candidate.frame_index
             if frame_index not in keys_by_frame:
-                raise EmbeddingFrameReadError("Une frame relue ne correspond à aucune candidate attendue.")
+                raise EmbeddingFrameReadError(
+                    "Une frame relue ne correspond à aucune candidate attendue."
+                )
             key = keys_by_frame.pop(frame_index)
             self._cache.put(key, self._provider.embed(candidate_preview.preview))
             computed_count += 1
         if keys_by_frame:
             missing_indexes = ", ".join(str(index) for index in sorted(keys_by_frame))
-            raise EmbeddingFrameReadError(f"Frames candidates introuvables dans la vidéo : {missing_indexes}")
+            raise EmbeddingFrameReadError(
+                f"Frames candidates introuvables dans la vidéo : {missing_indexes}"
+            )
 
+        stored_frames: tuple[FrameRecord, ...] = ()
         if dataset_video_id is not None and self._preview_cache is not None:
-            self._store_dataset_candidates(video_path, candidates, keys, dataset_video_id)
+            stored_frames = self._store_dataset_candidates(
+                video_path, candidates, keys, dataset_video_id
+            )
+        exported_count = 0
+        if self._candidate_exporter is not None and stored_frames:
+            exported_count = len(
+                self._candidate_exporter.export(
+                    video_path,
+                    stored_frames,
+                    video_path.resolve().parent / CANDIDATE_EXPORT_DIRECTORY_NAME,
+                )
+            )
 
         return EmbeddingReport(
             device=self._provider.device,
@@ -103,6 +137,7 @@ class VideoEmbeddingRunner:
             computed_count=computed_count,
             cached_count=cached_count,
             elapsed_seconds=perf_counter() - started,
+            exported_count=exported_count,
         )
 
     def _store_dataset_candidates(
@@ -111,7 +146,7 @@ class VideoEmbeddingRunner:
         candidates: tuple[PresampledCandidate, ...],
         keys: dict[int, EmbeddingCacheKey],
         video_id: int,
-    ) -> None:
+    ) -> tuple[FrameRecord, ...]:
         """Rélit seulement les candidates retenues pour persister leurs aperçus réduits."""
         assert self._dataset_repository is not None
         assert self._preview_cache is not None
@@ -119,29 +154,39 @@ class VideoEmbeddingRunner:
         if dataset_video is None:
             raise RuntimeError("La vidéo ne peut pas être relue après son ingestion.")
         pending = {candidate.frame_index: candidate for candidate in candidates}
+        stored: list[FrameRecord] = []
         for candidate_preview in self._preview_reader.read(
             video_path, candidates, self._analysis_max_width
         ):
             candidate = candidate_preview.candidate
             key = keys.get(candidate.frame_index)
             if key is None:
-                raise EmbeddingFrameReadError("Une candidate de dataset n'a pas de clé d'embedding.")
-            self._dataset_repository.upsert_frame(
-                FrameRecord(
-                    video_id=video_id,
-                    timestamp=candidate.timestamp,
-                    frame_index=candidate.frame_index,
-                    preview_reference=self._preview_cache.put(
-                        dataset_video.video_hash, candidate.frame_index, candidate_preview.preview
-                    ),
-                    sharpness=candidate.sharpness,
-                    embedding_reference=str(self._cache.reference_for(key)),
+                raise EmbeddingFrameReadError(
+                    "Une candidate de dataset n'a pas de clé d'embedding."
+                )
+            stored.append(
+                self._dataset_repository.upsert_frame(
+                    FrameRecord(
+                        video_id=video_id,
+                        timestamp=candidate.timestamp,
+                        frame_index=candidate.frame_index,
+                        preview_reference=self._preview_cache.put(
+                            dataset_video.video_hash,
+                            candidate.frame_index,
+                            candidate_preview.preview,
+                        ),
+                        sharpness=candidate.sharpness,
+                        embedding_reference=str(self._cache.reference_for(key)),
+                    )
                 )
             )
             pending.pop(candidate.frame_index, None)
         if pending:
             indexes = ", ".join(str(index) for index in sorted(pending))
-            raise EmbeddingFrameReadError(f"Aperçus candidates introuvables dans la vidéo : {indexes}")
+            raise EmbeddingFrameReadError(
+                f"Aperçus candidates introuvables dans la vidéo : {indexes}"
+            )
+        return tuple(stored)
 
 
 def format_embedding_report(report: EmbeddingReport) -> str:
@@ -152,6 +197,7 @@ def format_embedding_report(report: EmbeddingReport) -> str:
             f"Modèle : {report.model_name}",
             f"Embeddings calculés : {report.computed_count}",
             f"Embeddings depuis le cache : {report.cached_count}",
+            f"Candidates exportées : {report.exported_count}",
             f"Temps de traitement : {report.elapsed_seconds:.3f} s",
         )
     )

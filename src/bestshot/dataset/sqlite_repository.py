@@ -24,7 +24,7 @@ from bestshot.domain.preferences import (
     canonicalize_preference,
 )
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class DatasetRepositoryError(RuntimeError):
@@ -55,6 +55,9 @@ class SQLiteDatasetRepository:
                 if 2 not in applied:
                     self._apply_pairwise_preferences_schema(connection)
                     connection.execute("INSERT INTO schema_migrations(version) VALUES (2)")
+                if 3 not in applied:
+                    self._apply_learning_state_schema(connection)
+                    connection.execute("INSERT INTO schema_migrations(version) VALUES (3)")
         except sqlite3.Error as error:
             raise DatasetRepositoryError(f"Impossible de migrer le dataset : {error}") from error
 
@@ -259,13 +262,13 @@ class SQLiteDatasetRepository:
         )
 
     def get_video_by_source_path(self, source_path: Path) -> VideoRecord | None:
-        """Retrouve une vidéo par son chemin local normalisé."""
+        """Retrouve la version la plus récente d'une source locale normalisée."""
         try:
             normalized_path = str(source_path.resolve())
             with closing(self._connect()) as connection:
                 row = connection.execute(
                     "SELECT id, source_path, video_hash, source_size, source_mtime_ns, created_at "
-                    "FROM videos WHERE source_path = ?",
+                    "FROM videos WHERE source_path = ? ORDER BY updated_at DESC, id DESC LIMIT 1",
                     (normalized_path,),
                 ).fetchone()
         except (OSError, sqlite3.Error) as error:
@@ -431,6 +434,42 @@ class SQLiteDatasetRepository:
             distinct_frame_count=int(row["distinct_frame_count"]),
         )
 
+    def reset_preferences(self) -> int:
+        """Supprime les réponses pairwise, sans toucher aux frames ni aux caches."""
+        try:
+            with closing(self._connect()) as connection, connection:
+                cursor = connection.execute("DELETE FROM pairwise_preferences")
+        except sqlite3.Error as error:
+            raise DatasetRepositoryError(f"Impossible de réinitialiser les préférences : {error}") from error
+        return cursor.rowcount
+
+    def set_active_learning_pool(self, directory: Path) -> None:
+        """Persiste le dernier dossier de photos réellement importé."""
+        try:
+            normalized_path = str(directory.resolve())
+            with closing(self._connect()) as connection, connection:
+                connection.execute(
+                    """
+                    INSERT INTO learning_state(key, value, updated_at)
+                    VALUES ('active_photo_pool', ?, ?)
+                    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+                    """,
+                    (normalized_path, _now()),
+                )
+        except (OSError, sqlite3.Error) as error:
+            raise DatasetRepositoryError(f"Impossible de mémoriser le pool d'apprentissage : {error}") from error
+
+    def get_active_learning_pool(self) -> Path | None:
+        """Lit le dernier dossier de photos importé, sans vérifier ses fichiers."""
+        try:
+            with closing(self._connect()) as connection:
+                row = connection.execute(
+                    "SELECT value FROM learning_state WHERE key = 'active_photo_pool'"
+                ).fetchone()
+        except sqlite3.Error as error:
+            raise DatasetRepositoryError(f"Impossible de lire le pool d'apprentissage : {error}") from error
+        return Path(str(row["value"])) if row is not None else None
+
     def _list_preferences(
         self, where_clause: str, parameters: tuple[object, ...]
     ) -> list[PairwisePreference]:
@@ -526,6 +565,18 @@ class SQLiteDatasetRepository:
             "CREATE INDEX idx_pairwise_preferences_choice ON pairwise_preferences(preference)"
         )
 
+    @staticmethod
+    def _apply_learning_state_schema(connection: sqlite3.Connection) -> None:
+        connection.execute(
+            """
+            CREATE TABLE learning_state (
+              key TEXT PRIMARY KEY,
+              value TEXT NOT NULL,
+              updated_at TEXT NOT NULL
+            )
+            """
+        )
+
 
 def hash_video_file(video_path: Path) -> str:
     """Calcule séquentiellement le SHA-256 local d'une vidéo sans charger ses frames."""
@@ -550,6 +601,42 @@ def video_record_from_path(video_path: Path) -> VideoRecord:
         video_hash=hash_video_file(video_path),
         source_size=stat.st_size,
         source_mtime_ns=stat.st_mtime_ns,
+    )
+
+
+def photo_pool_record_from_paths(directory: Path, photos: tuple[Path, ...]) -> VideoRecord:
+    """Construit l'identité d'un pool photo virtuel pour le dataset existant.
+
+    Le schéma conserve une relation parent/candidates déjà utilisée par les vidéos.
+    Un dossier photo devient donc un parent local autonome : il n'est jamais une
+    candidate vidéo et ne peut pas être sélectionné dans l'export final.
+    """
+    if not photos:
+        raise DatasetRepositoryError("Le pool de photos ne peut pas être vide.")
+    normalized_directory = directory.resolve()
+    digest = hashlib.sha256(b"bestshot-photo-pool-v1\n")
+    source_size = 0
+    source_mtime_ns = 0
+    for photo_path in photos:
+        try:
+            normalized_photo = photo_path.resolve()
+            relative_path = normalized_photo.relative_to(normalized_directory)
+            stat = normalized_photo.stat()
+        except (OSError, ValueError) as error:
+            raise DatasetRepositoryError(f"Impossible d'identifier la photo du pool : {photo_path}") from error
+        if not normalized_photo.is_file():
+            raise DatasetRepositoryError(f"La source du pool n'est pas une photo : {photo_path}")
+        digest.update(str(relative_path).encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(hash_video_file(normalized_photo).encode("ascii"))
+        digest.update(b"\n")
+        source_size += stat.st_size
+        source_mtime_ns = max(source_mtime_ns, stat.st_mtime_ns)
+    return VideoRecord(
+        source_path=normalized_directory,
+        video_hash=digest.hexdigest(),
+        source_size=source_size,
+        source_mtime_ns=source_mtime_ns,
     )
 
 

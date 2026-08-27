@@ -143,6 +143,15 @@ class DatasetRepository(Protocol):
     def preference_stats(self) -> PreferenceStats:
         """Retourne les compteurs de comparaisons personnelles."""
 
+    def reset_preferences(self) -> int:
+        """Supprime les comparaisons pairwise sans supprimer les candidates."""
+
+    def set_active_learning_pool(self, directory: Path) -> None:
+        """Mémorise localement le dernier pool photo importé."""
+
+    def get_active_learning_pool(self) -> Path | None:
+        """Retourne le dernier pool photo importé, si son état est disponible."""
+
 
 def default_dataset_settings() -> DatasetSettings:
     """Fournit les chemins locaux par défaut hors de toute configuration utilisateur."""

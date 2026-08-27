@@ -17,14 +17,23 @@ class PairGenerationSettings:
     """Réglages de propositions, sans lien avec les scores de qualité V2."""
 
     temporal_window_seconds: float = 5.0
-    max_pairs_per_group: int = 10
+    max_pairs_per_group: int = 20
     seed: int = 42
+    photo_pool_coverage_segment_count: int = 20
+    photo_pool_maximum_cosine_similarity: float = 0.92
+    photo_pool_minimum_frame_gap: int = 4
 
     def __post_init__(self) -> None:
         if self.temporal_window_seconds <= 0:
             raise ValueError("La fenêtre temporelle doit être positive.")
         if self.max_pairs_per_group <= 0:
             raise ValueError("Le nombre maximal de paires doit être positif.")
+        if self.photo_pool_coverage_segment_count <= 0:
+            raise ValueError("Le nombre de segments de couverture doit être positif.")
+        if not -1.0 <= self.photo_pool_maximum_cosine_similarity <= 1.0:
+            raise ValueError("La similarité maximale du pool photo doit être comprise entre -1 et 1.")
+        if self.photo_pool_minimum_frame_gap < 0:
+            raise ValueError("L'écart minimal entre candidates doit être positif ou nul.")
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,7 +70,7 @@ class PairSelectionStrategy(Protocol):
         frames: Sequence[FrameEmbedding],
         settings: PairGenerationSettings,
     ) -> list[GeneratedPair]:
-        """Retourne au plus ``max_pairs_per_group`` paires canoniques."""
+        """Retourne des paires canoniques ordonnées par intérêt."""
 
 
 class RandomPairSelectionStrategy:
@@ -72,7 +81,7 @@ class RandomPairSelectionStrategy:
     ) -> list[GeneratedPair]:
         candidates = _all_pairs(frames, "random")
         random.Random(settings.seed).shuffle(candidates)
-        return candidates[: settings.max_pairs_per_group]
+        return candidates
 
 
 class NearbyPairSelectionStrategy:
@@ -90,7 +99,7 @@ class NearbyPairSelectionStrategy:
                     break
                 distances.append((distance, _pair_for(current, other, "nearby")))
         distances.sort(key=lambda item: (item[0], item[1].first_frame_id, item[1].second_frame_id))
-        return [pair for _, pair in distances[: settings.max_pairs_per_group]]
+        return [pair for _, pair in distances]
 
 
 class SimilarityPairSelectionStrategy:
@@ -105,7 +114,7 @@ class SimilarityPairSelectionStrategy:
                 similarity = _cosine_similarity(first.embedding, second.embedding)
                 similarities.append((similarity, _pair_for(first, second, "similar")))
         similarities.sort(key=lambda item: (-item[0], item[1].first_frame_id, item[1].second_frame_id))
-        return [pair for _, pair in similarities[: settings.max_pairs_per_group]]
+        return [pair for _, pair in similarities]
 
 
 class MixedPairSelectionStrategy:
@@ -118,7 +127,7 @@ class MixedPairSelectionStrategy:
     def select(
         self, frames: Sequence[FrameEmbedding], settings: PairGenerationSettings
     ) -> list[GeneratedPair]:
-        # Chaque source produit jusqu'au même plafond, puis la fusion alterne.
+        # La fusion entière est ensuite plafonnée seulement après exclusion des paires revues.
         nearby = self._nearby.select(frames, settings)
         similar = self._similarity.select(frames, settings)
         merged: list[GeneratedPair] = []
@@ -132,9 +141,46 @@ class MixedPairSelectionStrategy:
                 if key not in seen:
                     merged.append(pair)
                     seen.add(key)
-                    if len(merged) == settings.max_pairs_per_group:
-                        return merged
         return merged
+
+
+class PhotoPoolCoveragePairSelectionStrategy:
+    """Couvre les portions temporelles d'un pool sans analyser ni détecter les scènes.
+
+    Les candidates d'un film exportées dans le pool sont rangées par ordre temporel.
+    Cette stratégie découpe donc cet ordre en segments réguliers, choisit dans chacun
+    des images encore apparentées mais pas quasi identiques, puis entrelace les listes.
+    """
+
+    def select(
+        self, frames: Sequence[FrameEmbedding], settings: PairGenerationSettings
+    ) -> list[GeneratedPair]:
+        ordered = sorted(frames, key=lambda item: (item.frame.timestamp, item.frame.frame_index))
+        segment_count = min(
+            settings.photo_pool_coverage_segment_count,
+            len(ordered) // (settings.photo_pool_minimum_frame_gap + 1),
+        )
+        if segment_count == 0:
+            return []
+        ranked_segments: list[list[GeneratedPair]] = []
+        for segment in _contiguous_segments(ordered, segment_count):
+            similarities: list[tuple[float, GeneratedPair]] = []
+            for first_index, first in enumerate(segment):
+                for second in segment[first_index + 1 :]:
+                    if (
+                        second.frame.frame_index - first.frame.frame_index
+                        < settings.photo_pool_minimum_frame_gap
+                    ):
+                        continue
+                    similarity = _cosine_similarity(first.embedding, second.embedding)
+                    if similarity >= settings.photo_pool_maximum_cosine_similarity:
+                        continue
+                    similarities.append(
+                        (similarity, _pair_for(first, second, "coverage-similar"))
+                    )
+            similarities.sort(key=lambda item: (-item[0], item[1].first_frame_id, item[1].second_frame_id))
+            ranked_segments.append([pair for _, pair in similarities])
+        return _interleave(ranked_segments)
 
 
 def generate_pairs(
@@ -144,17 +190,17 @@ def generate_pairs(
     existing_pairs: set[tuple[int, int]] | None = None,
     *,
     include_reviewed: bool = False,
+    return_all: bool = False,
 ) -> list[GeneratedPair]:
     """Génère des paires sans reproposer les comparaisons déjà enregistrées."""
     normalized_existing = existing_pairs or set()
     pairs = strategy.select(frames, settings)
-    if include_reviewed:
-        return pairs
-    return [
+    available = pairs if include_reviewed else [
         pair
         for pair in pairs
         if (pair.first_frame_id, pair.second_frame_id) not in normalized_existing
     ]
+    return available if return_all else available[: settings.max_pairs_per_group]
 
 
 def _all_pairs(frames: Sequence[FrameEmbedding], reason: str) -> list[GeneratedPair]:
@@ -162,6 +208,30 @@ def _all_pairs(frames: Sequence[FrameEmbedding], reason: str) -> list[GeneratedP
     for first_index, first in enumerate(frames):
         for second in frames[first_index + 1 :]:
             pairs.append(_pair_for(first, second, reason))
+    return pairs
+
+
+def _contiguous_segments(
+    frames: Sequence[FrameEmbedding], segment_count: int
+) -> list[Sequence[FrameEmbedding]]:
+    """Découpe l'ordre temporel sans déduire de frontière de scène."""
+    base_size, remainder = divmod(len(frames), segment_count)
+    segments: list[Sequence[FrameEmbedding]] = []
+    start = 0
+    for index in range(segment_count):
+        size = base_size + (1 if index < remainder else 0)
+        segments.append(frames[start : start + size])
+        start += size
+    return segments
+
+
+def _interleave(groups: Sequence[Sequence[GeneratedPair]]) -> list[GeneratedPair]:
+    """Entrelace les groupes pour parcourir l'ensemble de la chronologie."""
+    pairs: list[GeneratedPair] = []
+    for index in range(max((len(group) for group in groups), default=0)):
+        for group in groups:
+            if index < len(group):
+                pairs.append(group[index])
     return pairs
 
 

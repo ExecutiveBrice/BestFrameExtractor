@@ -65,7 +65,9 @@ def test_models_download_embedding_uses_explicit_model_manager(monkeypatch, tmp_
     assert f"Modèle embedding : installé localement ({cache_path})" in result.output
 
 
-def test_dataset_commands_report_videos_and_reset_only_labels(monkeypatch, tmp_path: Path) -> None:  # type: ignore[no-untyped-def]
+def test_dataset_commands_report_videos_and_reset_only_labels(
+    monkeypatch, tmp_path: Path
+) -> None:  # type: ignore[no-untyped-def]
     video_path = tmp_path / "family.mp4"
     video_path.write_bytes(b"video")
     repository = SQLiteDatasetRepository(tmp_path / "bestshot.db")

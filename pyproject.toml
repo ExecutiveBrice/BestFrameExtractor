@@ -13,19 +13,20 @@ authors = [{ name = "BestShotAI contributors" }]
 dependencies = [
     "av>=12.0",
     "numpy>=2.0",
-    "opencv-python-headless>=4.10",
     "PyYAML>=6.0",
     "typer>=0.12",
 ]
 
 [project.scripts]
 bestshot = "bestshot.cli:app"
+bestshot-gui = "bestshot.desktop.application:main"
 
 [project.optional-dependencies]
 embedding = [
     "huggingface-hub>=0.24",
     "Pillow>=10.0",
     "torch>=2.3",
+    "torchvision>=0.18",
     "transformers>=4.44",
 ]
 desktop = [
