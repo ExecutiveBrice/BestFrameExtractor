@@ -189,13 +189,13 @@ arrêt. La CLI n'envoie pas ce rappel et conserve donc son comportement habituel
 
 `desktop.MainWindow` est une présentation PySide6 proposée par l'extra optionnel
 `desktop`. Elle permet de choisir le dossier source et le dossier de destination, de
-lancer un `BatchExportRunner`, puis d'afficher les photos exportées une par une. Elle
-expose trois réglages temporaires à fort impact : `selection.minimum_score`,
-`deduplication.temporal_window_ms` et `deduplication.similarity_threshold`. Ils sont
-convertis en objets typés par `DesktopSelectionParameters`, sans réécrire le YAML ni
-changer les valeurs employées par la CLI. Le mode graphique passe une limite de sélection
-absente : seules les règles de qualité, déduplication et le maximum par scène configuré
-déterminent donc le nombre d'exports. Le traitement s'exécute dans `ProcessingWorker`,
+lancer un `PhotoPoolRunner` assemblé par `infrastructure.workflow_factory`, puis
+d'afficher les photos exportées une par une. Elle utilise exclusivement le mode pool
+avec CLIP et le format JPEG, sans sélecteur d'approche ni de format. Son seul réglage
+d'analyse est la cadence de 1 à 10 photos par seconde, par pas entier de 1, initialisée
+depuis `photo_pool.fps` et arrondie à l'entier le plus proche. Cette valeur est transmise
+au runner sans réécrire le YAML. Les règles du pool déterminent le nombre d'exports,
+sans quota ni dédoublonnage. Le traitement s'exécute dans `ProcessingWorker`,
 déplacé dans un `QThread`, afin que les interactions de la fenêtre restent disponibles.
 Le worker ne manipule aucun widget ; il ne transmet que les événements `BatchProgress`, le
 résultat et les erreurs vers le thread de l'interface. À chaque événement de vidéo
@@ -207,6 +207,54 @@ La fenêtre affiche les compteurs cumulés « retenues » et « exportées » à
 de sélection ou d'export. Son bouton Arrêter déclenche un `threading.Event` lu par le
 worker ; l'opération en cours se termine proprement, mais aucune nouvelle frame ou vidéo
 n'est démarrée ensuite.
+
+`services.extraction_estimate` réutilise `find_videos` et `VideoProbe` pour cumuler les
+durées disponibles, sans décodage. `VideoDurationSummary` estime le nombre de candidates
+par durée totale × cadence, arrondi à l'entier supérieur. `desktop.EstimateWorker`
+exécute cette inspection locale dans le `QThreadPool`, après une temporisation de saisie.
+La fenêtre conserve les durées pour recalculer immédiatement lors d'un changement de
+cadence et ignore les réponses d'un ancien dossier. L'estimation affichée précède le
+filtrage qualité/CLIP ; elle signale les durées manquantes et les dossiers sans vidéo.
+
+## Mode pool pour album
+
+`domain.photo_pool` porte les paramètres, les mesures `PoolQuality` et `PoolContent`,
+ainsi que `PhotoPoolPolicy`. La décision applique d'abord des exigences techniques
+obligatoires, puis une similarité positive (personne OU paysage) et une marge par rapport
+au contenu indésirable. Le résultat est accepté, à vérifier ou rejeté. Aucun score de
+visage, orientation, esthétique, quota par scène ou dédoublonnage n'intervient.
+
+`services.photo_pool.PhotoPoolRunner` orchestre ses ports de décodage, qualité, contenu,
+écriture d'image et dépôt de rapports. Il ne conserve que des chemins et des compteurs ;
+les décisions sont écrites séquentiellement. Il réutilise `BatchResult` et `BatchProgress`
+pour la CLI et le worker Qt. L'arrêt coopératif est transmis jusqu'au décodeur et vérifié
+entre les étapes coûteuses. Les erreurs vidéo sont isolées au sein du lot, avec manifeste
+partiel pour les exports déjà produits.
+
+`infrastructure.photo_pool` contient les adaptateurs PyAV, OpenCV, Pillow et fichiers.
+PyAV décode séquentiellement et ne convertit en RGB que les frames échantillonnées.
+Une seule image native transitoire circule entre les ports, sans accumulation de buffers.
+OpenCV mesure la netteté sur des niveaux de gris **0 à 255**, à largeur d'analyse fixe,
+avec un léger débruitage, un rapport aux gradients et un contrôle natif supplémentaire.
+Pillow écrit les pixels natifs de cette même frame, sans réextraction à un timestamp
+approximatif. Le dépôt crée des répertoires distincts pour chaque nouvel essai.
+
+`infrastructure.clip_content.LocalClipContentScorer` charge le modèle officiel CLIP
+image/texte et son processeur avec `local_files_only=True`, sans code distant. Le cadre
+est inscrit entier dans un carré avec marges, pour éviter de perdre un sujet sur les
+bords par recadrage central. Les embeddings texte sont calculés une fois ; seuls les
+maximums de similarité par groupe et les descriptions gagnantes sont conservés dans
+les rapports. Les embeddings d'images ne sont jamais stockés. Les similarités cosinus
+ne constituent pas des probabilités calibrées. Les descriptions positives couvrent
+explicitement les personnes de face, de profil et de dos. CUDA, MPS ou CPU sont choisis
+selon leur disponibilité.
+
+Seul `ClipContentModelManager.download`, invoqué par `bestshot models download clip`,
+accède au réseau pour télécharger une liste de fichiers de modèle à une révision fixée.
+Le mode pool échoue explicitement si le modèle manque ; il ne continue pas avec un
+filtre sémantique absent. Les sections `photo_pool` et `clip_content` sont converties en
+objets typés par l'adaptateur de configuration. Les règles de confidentialité restent
+identiques : aucune vidéo, image ou métadonnée utilisateur n'est transmise.
 
 ## Configuration
 

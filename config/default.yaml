@@ -106,3 +106,34 @@ aesthetic_model:
   cache_dir: .bestshot/models/aesthetic
   raw_score_min: 0.0
   raw_score_max: 5.0
+
+# Mode pool : seuils indépendants du score composite historique.
+photo_pool:
+  fps: 3.0
+  analysis_width: 960
+  minimum_sharpness: 70.0
+  minimum_detail_ratio: 0.025
+  minimum_native_sharpness: 20.0
+  minimum_contrast: 12.0
+  minimum_luminance: 15.0
+  maximum_luminance: 240.0
+  minimum_content_similarity: 0.23
+  content_margin: 0.01
+  review_similarity: 0.20
+  review_margin: -0.02
+  jpeg_quality: 95
+
+clip_content:
+  repo_id: openai/clip-vit-base-patch32
+  revision: 3d74acf9a28c67741b2f4f2ea7635f0aaf6f0268
+  cache_dir: .bestshot/models/clip-content
+  people_prompts:
+    - a photo of a person
+  landscape_prompts:
+    - a scenic landscape
+  reject_prompts:
+    - a photo looking straight down at empty pavement or asphalt
+    - a close-up photo of the ground with no scenery or people
+    - a photo of an empty blank wall or ceiling
+    - a photo almost completely obscured by a finger over the camera
+    - a completely black image

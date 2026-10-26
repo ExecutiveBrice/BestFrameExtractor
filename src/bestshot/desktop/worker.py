@@ -10,6 +10,7 @@ from threading import Event
 from PySide6.QtCore import QObject, Signal, Slot
 
 from bestshot.services.batch import BatchExportRunner, BatchProgress
+from bestshot.services.photo_pool import PhotoPoolRunner
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ class ProcessingWorker(QObject):
     failed = Signal(str)
     finished = Signal()
 
-    def __init__(self, runner: BatchExportRunner, job: DesktopProcessingJob) -> None:
+    def __init__(self, runner: BatchExportRunner | PhotoPoolRunner, job: DesktopProcessingJob) -> None:
         super().__init__()
         self._runner = runner
         self._job = job

@@ -9,17 +9,22 @@ from bestshot.infrastructure.candidate_repository import (
     CandidateRepositoryError,
     LocalCandidatePreviewRepository,
 )
+from bestshot.infrastructure.clip_content import ClipContentModelManager
 from bestshot.infrastructure.config import (
     ConfigurationError,
     load_aesthetic_model_settings,
     load_candidate_extraction_settings,
+    load_clip_content_settings,
     load_export_settings,
     load_scene_detector_settings,
     load_technical_scoring_settings,
 )
 from bestshot.infrastructure.ffmpeg import FFmpegExportError, FFmpegFrameExporter
 from bestshot.infrastructure.ffprobe import SubprocessFFprobeRunner
-from bestshot.infrastructure.workflow_factory import create_video_selection_workflow
+from bestshot.infrastructure.workflow_factory import (
+    create_photo_pool_runner,
+    create_video_selection_workflow,
+)
 from bestshot.plugins.aesthetic import AestheticModelManager, create_aesthetic_scorer
 from bestshot.scoring.face import FaceScoringError
 from bestshot.scoring.technical import TechnicalScorer
@@ -57,14 +62,21 @@ def models() -> None:
     settings = load_aesthetic_model_settings()
     status = AestheticModelManager().status(settings)
     typer.echo(f"Modèle esthétique : {status.message} ({status.cache_path})")
+    clip = load_clip_content_settings()
+    installed = ClipContentModelManager().installed(clip)
+    typer.echo(f"Modèle CLIP pool : {'installé' if installed else 'absent'} ({clip.cache_dir})")
 
 
 @models_app.command("download")
 def download_model(name: str = typer.Argument(...)) -> None:
     """Télécharge explicitement un modèle optionnel dans le cache local."""
-    if name != "aesthetic":
-        raise typer.BadParameter("Seul le modèle aesthetic est disponible.")
+    if name not in {"aesthetic", "clip"}:
+        raise typer.BadParameter("Modèles disponibles : aesthetic, clip.")
     try:
+        if name == "clip":
+            path = ClipContentModelManager().download(load_clip_content_settings())
+            typer.echo(f"Modèle CLIP pool installé : {path}")
+            return
         status = AestheticModelManager().download(load_aesthetic_model_settings())
     except (ConfigurationError, OSError, RuntimeError) as error:
         typer.echo(str(error), err=True)
@@ -244,5 +256,27 @@ def batch(
         typer.echo(str(error), err=True)
         raise typer.Exit(code=1) from error
     typer.echo(format_batch_result(result))
+    if result.failures:
+        raise typer.Exit(code=1)
+
+
+@app.command()
+def pool(
+    source: Annotated[Path, typer.Argument(..., exists=True, readable=True)],
+    output: Annotated[Path, typer.Option("--output", file_okay=False)] = Path("photos-pool"),
+    fps: Annotated[float | None, typer.Option("--fps", min=0.01)] = None,
+    start: Annotated[float, typer.Option("--start", min=0)] = 0,
+    duration: Annotated[float | None, typer.Option("--duration", min=0.01)] = None,
+    image_format: Annotated[str, typer.Option("--format")] = "jpeg",
+) -> None:
+    """Crée un pool de photos nettes avec personnes ou paysages (fichier ou dossier)."""
+    try:
+        runner = create_photo_pool_runner(fps)
+        result = runner.run(source, None, output, image_format, start=start, duration=duration)
+    except (ConfigurationError, OSError, RuntimeError, ValueError) as error:
+        typer.echo(str(error), err=True)
+        raise typer.Exit(code=1) from error
+    typer.echo(format_batch_result(result))
+    typer.echo("Photos retenues : pool/ ; contenu incertain : a_verifier/ ; détails : decisions.jsonl.")
     if result.failures:
         raise typer.Exit(code=1)

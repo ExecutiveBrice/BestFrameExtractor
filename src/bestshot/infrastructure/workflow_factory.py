@@ -18,9 +18,44 @@ from bestshot.selection.deduplicate import (
     PerceptualHashSimilarityScorer,
 )
 from bestshot.selection.selector import BestFrameSelector, SelectionSettings
+from bestshot.services.photo_pool import PhotoPoolRunner
 from bestshot.services.video_selection import VideoSelectionWorkflow
 from bestshot.video.candidate_extractor import CandidateExtractor, PyAVCandidateFrameBackend
 from bestshot.video.scene_detector import PySceneDetectBackend, SceneDetector
+
+
+def create_photo_pool_runner(fps: float | None = None) -> PhotoPoolRunner:
+    """Assemble le mode pool strictement local ; aucun téléchargement implicite."""
+    from dataclasses import replace
+
+    from bestshot.infrastructure.clip_content import LocalClipContentScorer
+    from bestshot.infrastructure.config import load_clip_content_settings, load_photo_pool_settings
+    from bestshot.infrastructure.photo_pool import (
+        LocalPoolImageWriter,
+        LocalPoolRepository,
+        OpenCVPoolQualityScorer,
+        PyAVPoolFrameSource,
+    )
+
+    settings = load_photo_pool_settings()
+    if fps is not None:
+        settings = replace(settings, fps=fps)
+    clip = load_clip_content_settings()
+    return PhotoPoolRunner(
+        PyAVPoolFrameSource(),
+        OpenCVPoolQualityScorer(settings.analysis_width),
+        LocalClipContentScorer(clip),
+        LocalPoolImageWriter(),
+        LocalPoolRepository(),
+        settings,
+        {
+            "repo_id": clip.repo_id,
+            "revision": clip.revision,
+            "people_prompts": clip.people_prompts,
+            "landscape_prompts": clip.landscape_prompts,
+            "reject_prompts": clip.reject_prompts,
+        },
+    )
 
 
 def create_video_selection_workflow(

@@ -23,29 +23,81 @@ pip install -e ".[dev]"
 bestshot --help
 ```
 
+## Pool de photos pour album avec CLIP
+
+Le mode `pool` conserve les images suffisamment nettes qui montrent des personnes ou
+un paysage. Les personnes de face, de profil et de dos sont admissibles ; aucun visage
+n'est exigé et aucune identité n'est recherchée. Les photos similaires sont conservées,
+sans quota par scène. Les seuils de netteté et de contenu sont indépendants : un bon
+contenu ne compense jamais un échec du filtre technique.
+
+```bash
+pip install -e ".[pool,desktop]"
+bestshot models download clip
+bestshot pool resources --output .bestshot/photos-pool
+```
+
+Le téléchargement explicite récupère environ 600 Mo de poids officiels CLIP ViT-B/32,
+à une révision fixée dans le YAML. L'analyse fonctionne ensuite exclusivement avec les
+fichiers locaux, sans envoyer de vidéos, d'images ni de métadonnées. Un modèle absent
+provoque une erreur explicite ; aucun résultat neutre ne remplace le filtre de contenu.
+
+La source peut être un fichier ou un dossier. Pour un premier essai moins volumineux :
+
+```bash
+bestshot pool resources/GoPro_video.MP4 --fps 1 --output .bestshot/essai-pool
+bestshot pool resources/Film_famille_2020.mp4 --start 30 --duration 20 --output .bestshot/essai-pool
+```
+
+La cadence par défaut est de trois images analysées par seconde. Les images retenues
+sont écrites immédiatement avec les dimensions natives et les pixels de la frame
+analysée. Chaque vidéo reçoit un répertoire contenant :
+
+- `pool/` : photos retenues ;
+- `a_verifier/` : photos techniquement admissibles au contenu incertain ;
+- `decisions.jsonl` : une décision par candidate, avec timestamp, numéro de frame,
+  mesures techniques, similarités CLIP et chemin de la photo éventuelle ;
+- `manifest.json` : paramètres, modèle, compteurs et état du traitement.
+
+Un nouvel essai crée un nouveau répertoire et préserve les précédents. Le mode pool
+est utilisé dans l'interface de bureau, avec la cadence réglable. Le bouton
+Arrêter est vérifié pendant le décodage et entre les analyses ; les exports existants
+et un manifeste partiel sont conservés.
+
+CLIP classe le contenu du cadre entier : ses similarités ne sont pas des probabilités.
+La netteté est mesurée à une largeur fixe et sur les pixels natifs. Ces heuristiques
+peuvent encore laisser passer un sujet flou sur un fond net, ou écarter une scène peu
+texturée. Les seuils `photo_pool` et descriptions `clip_content` restent ajustables dans
+`config/default.yaml`. Une vérification visuelle reste nécessaire pour un album imprimé.
+
 ## Application de bureau
 
 L'interface de bureau est optionnelle et entièrement locale. Installez son extra, puis
 lancez-la depuis la racine du dépôt :
 
 ```bash
-pip install -e ".[desktop]"
+pip install -e ".[pool,desktop]"
+bestshot models download clip
 bestshot-gui
 ```
 
 Elle permet de choisir le dossier de vidéos et la destination des exports, puis de régler
-trois paramètres de sélectivité avant de lancer le traitement sans bloquer la fenêtre :
-le score de qualité minimal, la fenêtre anti-doublons et le seuil de similarité visuelle.
-Il n'y a pas de quota artificiel par vidéo : seules les règles de qualité et de diversité
-déterminent le nombre final de photos. Les résultats s'affichent ensuite une image à la
-fois avec les boutons de navigation.
+la cadence de 1 à 10 photos analysées par seconde, par pas de 1. Elle utilise toujours
+le mode pool avec CLIP et exporte les photos en JPEG. Les photos similaires sont
+conservées et les cas incertains sont placés dans `a_verifier/`. Les résultats
+s'affichent ensuite une image à la fois avec les boutons de navigation.
+
+Une estimation du nombre d'images possibles s'actualise selon le dossier source et la
+cadence : durée totale des vidéos en secondes × photos par seconde (par exemple,
+60 secondes à 3 photos/s donnent environ 180 images). Elle précède le filtrage qualité
+et CLIP : le nombre de JPEG effectivement exportés peut être inférieur. Les vidéos dont
+la durée est illisible sont signalées et exclues du total estimé.
 
 Pendant le traitement, le compteur indique en direct le nombre de photos retenues et le
 nombre déjà exporté. Le bouton **Arrêter** demande un arrêt coopératif : aucune nouvelle
 vidéo n'est lancée, et l'export s'interrompt entre deux frames. Les photos déjà extraites
 restent disponibles avec un `manifest.json` partiel pour la vidéo interrompue.
-Elle traite les mêmes extensions et utilise le même pipeline que `bestshot batch` ; elle
-ne charge qu'une photo exportée à la fois pour la visualisation et n'envoie aucune donnée
+L'interface ne charge qu'une photo exportée à la fois pour la visualisation et n'envoie aucune donnée
 sur Internet.
 
 ## Où placer les vidéos

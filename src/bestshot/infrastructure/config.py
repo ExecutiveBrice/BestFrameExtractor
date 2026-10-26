@@ -8,6 +8,7 @@ from typing import cast
 
 import yaml  # type: ignore[import-untyped]
 
+from bestshot.domain.photo_pool import ClipContentSettings, PhotoPoolSettings
 from bestshot.plugins.aesthetic import AestheticModelSettings
 from bestshot.scoring.composite import CompositeScoringSettings, CompositeWeights
 from bestshot.scoring.face import FaceScoringSettings
@@ -24,6 +25,64 @@ DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[3] / "config" / "default.
 
 class ConfigurationError(ValueError):
     """La configuration YAML est absente ou invalide."""
+
+
+def load_photo_pool_settings(config_path: Path = DEFAULT_CONFIG_PATH) -> PhotoPoolSettings:
+    values = _mapping(_load_root(config_path).get("photo_pool"))
+    try:
+        return PhotoPoolSettings(
+            fps=_positive_float(values, "fps"),
+            analysis_width=_positive_int(values, "analysis_width"),
+            minimum_sharpness=_positive_float(values, "minimum_sharpness"),
+            minimum_detail_ratio=_positive_float(values, "minimum_detail_ratio"),
+            minimum_native_sharpness=_positive_float(values, "minimum_native_sharpness"),
+            minimum_contrast=_positive_float(values, "minimum_contrast"),
+            minimum_luminance=_non_negative_float(values, "minimum_luminance"),
+            maximum_luminance=_positive_float(values, "maximum_luminance"),
+            minimum_content_similarity=_signed_similarity(values, "minimum_content_similarity"),
+            content_margin=_signed_similarity(values, "content_margin"),
+            review_similarity=_signed_similarity(values, "review_similarity"),
+            review_margin=_signed_similarity(values, "review_margin"),
+            jpeg_quality=_positive_int(values, "jpeg_quality"),
+        )
+    except ValueError as error:
+        raise ConfigurationError(f"photo_pool : {error}") from error
+
+
+def load_clip_content_settings(config_path: Path = DEFAULT_CONFIG_PATH) -> ClipContentSettings:
+    values = _mapping(_load_root(config_path).get("clip_content"))
+    try:
+        return ClipContentSettings(
+            repo_id=_required_string(values, "repo_id"),
+            revision=_required_string(values, "revision"),
+            cache_dir=_path(values, "cache_dir"),
+            people_prompts=_prompts(values, "people_prompts"),
+            landscape_prompts=_prompts(values, "landscape_prompts"),
+            reject_prompts=_prompts(values, "reject_prompts"),
+        )
+    except ValueError as error:
+        raise ConfigurationError(f"clip_content : {error}") from error
+
+
+def _required_string(values: Mapping[str, object], key: str) -> str:
+    value = values.get(key)
+    if isinstance(value, str) and value.strip():
+        return value
+    raise ConfigurationError(f"Texte attendu pour {key}.")
+
+
+def _prompts(values: Mapping[str, object], key: str) -> tuple[str, ...]:
+    value = values.get(key)
+    if isinstance(value, list) and value and all(isinstance(v, str) and v.strip() for v in value):
+        return tuple(value)
+    raise ConfigurationError(f"Liste de descriptions attendue pour {key}.")
+
+
+def _signed_similarity(values: Mapping[str, object], key: str) -> float:
+    value = values.get(key)
+    if not isinstance(value, bool) and isinstance(value, (int, float)) and -1 <= value <= 1:
+        return float(value)
+    raise ConfigurationError(f"Similarité entre -1 et 1 attendue pour {key}.")
 
 
 def load_scene_detector_settings(config_path: Path = DEFAULT_CONFIG_PATH) -> SceneDetectorSettings:

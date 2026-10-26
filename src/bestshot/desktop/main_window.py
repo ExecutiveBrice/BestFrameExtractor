@@ -5,11 +5,9 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QThread, QUrl, Slot
+from PySide6.QtCore import Qt, QThread, QThreadPool, QTimer, QUrl, Slot
 from PySide6.QtGui import QDesktopServices, QPixmap, QResizeEvent
 from PySide6.QtWidgets import (
-    QComboBox,
-    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -26,13 +24,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from bestshot.desktop.factory import (
-    DesktopSelectionParameters,
-    create_batch_export_runner,
-    load_desktop_selection_parameters,
-)
+from bestshot.desktop.estimate_worker import EstimateWorker
 from bestshot.desktop.worker import DesktopProcessingJob, ProcessingWorker
+from bestshot.infrastructure.config import load_photo_pool_settings
+from bestshot.infrastructure.workflow_factory import create_photo_pool_runner
 from bestshot.services.batch import BatchProgress, BatchResult
+from bestshot.services.extraction_estimate import VideoDurationSummary
 
 
 class MainWindow(QMainWindow):
@@ -44,6 +41,12 @@ class MainWindow(QMainWindow):
         self._worker: ProcessingWorker | None = None
         self._photos: tuple[Path, ...] = ()
         self._photo_index = 0
+        self._duration_summary: VideoDurationSummary | None = None
+        self._estimate_request_id = 0
+        self._estimate_timer = QTimer(self)
+        self._estimate_timer.setSingleShot(True)
+        self._estimate_timer.setInterval(300)
+        self._estimate_timer.timeout.connect(self._inspect_source_durations)
 
         self.setWindowTitle("BestShotAI")
         self.setMinimumSize(860, 640)
@@ -73,49 +76,32 @@ class MainWindow(QMainWindow):
         output_row = self._path_row(self.output_input, "Parcourir la destination", self._choose_output_directory)
         form.addRow("Photos exportées", output_row)
 
-        defaults = load_desktop_selection_parameters()
-        self.minimum_score_input = QDoubleSpinBox()
-        self.minimum_score_input.setRange(0.0, 1.0)
-        self.minimum_score_input.setDecimals(2)
-        self.minimum_score_input.setSingleStep(0.05)
-        self.minimum_score_input.setValue(defaults.minimum_score)
-        self.minimum_score_input.setSuffix(" / 1")
-        self.minimum_score_input.setToolTip("Plus ce score est élevé, moins de photos seront retenues.")
-        form.addRow("Score de qualité minimal", self.minimum_score_input)
+        self.pool_fps_input = QSpinBox()
+        self.pool_fps_input.setRange(1, 10)
+        self.pool_fps_input.setSingleStep(1)
+        self.pool_fps_input.setValue(round(load_photo_pool_settings().fps))
+        self.pool_fps_input.setToolTip("Une cadence élevée produit un pool plus fourni.")
+        form.addRow("Photos analysées par seconde", self.pool_fps_input)
 
-        self.temporal_window_input = QSpinBox()
-        self.temporal_window_input.setRange(100, 60_000)
-        self.temporal_window_input.setSingleStep(100)
-        self.temporal_window_input.setValue(defaults.temporal_window_ms)
-        self.temporal_window_input.setSuffix(" ms")
-        self.temporal_window_input.setToolTip(
-            "Une fenêtre plus longue élimine davantage de photos similaires prises à la suite."
+        self.estimate_label = QLabel("Choisissez un dossier source pour estimer le nombre d'images.")
+        self.estimate_label.setWordWrap(True)
+        self.estimate_label.setToolTip(
+            "Durée totale des vidéos en secondes × photos par seconde. "
+            "Le filtrage de qualité et CLIP peut réduire le nombre de JPEG exportés."
         )
-        form.addRow("Fenêtre anti-doublons", self.temporal_window_input)
+        form.addRow("Images possibles avant filtrage", self.estimate_label)
+        self.source_input.textChanged.connect(self._schedule_estimate)
+        self.pool_fps_input.valueChanged.connect(self._update_estimate_label)
 
-        self.similarity_threshold_input = QDoubleSpinBox()
-        self.similarity_threshold_input.setRange(0.0, 1.0)
-        self.similarity_threshold_input.setDecimals(2)
-        self.similarity_threshold_input.setSingleStep(0.05)
-        self.similarity_threshold_input.setValue(defaults.similarity_threshold)
-        self.similarity_threshold_input.setSuffix(" / 1")
-        self.similarity_threshold_input.setToolTip(
-            "Un seuil plus bas considère davantage d'images comme des doublons."
-        )
-        form.addRow("Seuil de similarité visuelle", self.similarity_threshold_input)
-
-        self.format_input = QComboBox()
-        self.format_input.addItem("JPEG", "jpeg")
-        self.format_input.addItem("PNG", "png")
-        form.addRow("Format", self.format_input)
         layout.addLayout(form)
 
-        selection_help = QLabel(
-            "Sélectivité : augmentez le score minimal, agrandissez la fenêtre anti-doublons "
-            "ou baissez le seuil de similarité pour obtenir moins de photos."
+        self.selection_help = QLabel(
+            "CLIP : paysages et personnes de face, de profil ou de dos. "
+            "Les photos similaires sont conservées ; les cas incertains vont dans a_verifier. "
+            "Les photos sont exportées en JPEG."
         )
-        selection_help.setWordWrap(True)
-        layout.addWidget(selection_help)
+        self.selection_help.setWordWrap(True)
+        layout.addWidget(self.selection_help)
 
         action_row = QHBoxLayout()
         self.start_button = QPushButton("Lancer la sélection")
@@ -181,6 +167,62 @@ class MainWindow(QMainWindow):
         return row
 
     @Slot()
+    def _schedule_estimate(self) -> None:
+        self._estimate_request_id += 1
+        self._duration_summary = None
+        self._estimate_timer.stop()
+        source = self.source_input.text().strip()
+        if not source:
+            self.estimate_label.setText("Choisissez un dossier source pour estimer le nombre d'images.")
+            return
+        self.estimate_label.setText("Lecture des durées des vidéos…")
+        self._estimate_timer.start()
+
+    @Slot()
+    def _inspect_source_durations(self) -> None:
+        directory = Path(self.source_input.text().strip()).expanduser()
+        if not directory.is_dir():
+            self.estimate_label.setText("Choisissez un dossier source existant.")
+            return
+        worker = EstimateWorker(directory, self._estimate_request_id)
+        worker.signals.completed.connect(self._on_durations_ready)
+        worker.signals.failed.connect(self._on_estimate_failed)
+        QThreadPool.globalInstance().start(worker)
+
+    @Slot(int, object)
+    def _on_durations_ready(self, request_id: int, summary: VideoDurationSummary) -> None:
+        if request_id != self._estimate_request_id:
+            return
+        self._duration_summary = summary
+        self._update_estimate_label()
+
+    @Slot(int, str)
+    def _on_estimate_failed(self, request_id: int, error: str) -> None:
+        if request_id == self._estimate_request_id:
+            self.estimate_label.setText(f"Estimation indisponible : {error}")
+
+    @Slot()
+    def _update_estimate_label(self) -> None:
+        summary = self._duration_summary
+        if summary is None:
+            return
+        if summary.video_count == 0:
+            self.estimate_label.setText("Aucune vidéo compatible dans ce dossier.")
+            return
+        if summary.unavailable_count == summary.video_count:
+            self.estimate_label.setText("Estimation indisponible : durées des vidéos illisibles.")
+            return
+        fps = self.pool_fps_input.value()
+        count = f"{summary.estimate_images(fps):,}".replace(",", " ")
+        text = (
+            f"Environ {count} images ({summary.duration_seconds:g} s × {fps} photos/s), "
+            "avant filtrage qualité et CLIP."
+        )
+        if summary.unavailable_count:
+            text += f" Estimation partielle : {summary.unavailable_count} vidéo(s) sans durée."
+        self.estimate_label.setText(text)
+
+    @Slot()
     def _choose_source_directory(self) -> None:
         selected = self._choose_directory("Choisir le dossier de vidéos", self.source_input.text())
         if selected:
@@ -234,16 +276,10 @@ class MainWindow(QMainWindow):
         job = DesktopProcessingJob(
             source_directory=source_directory,
             output_directory=output_directory,
-            image_format=str(self.format_input.currentData()),
+            image_format="jpeg",
         )
         try:
-            runner = create_batch_export_runner(
-                DesktopSelectionParameters(
-                    minimum_score=self.minimum_score_input.value(),
-                    similarity_threshold=self.similarity_threshold_input.value(),
-                    temporal_window_ms=self.temporal_window_input.value(),
-                )
-            )
+            runner = create_photo_pool_runner(self.pool_fps_input.value())
         except (OSError, RuntimeError, ValueError) as error:
             self._show_validation_error(f"Configuration de traitement invalide : {error}")
             self.start_button.setEnabled(True)
@@ -282,6 +318,7 @@ class MainWindow(QMainWindow):
             self._add_exported_photos(progress.image_paths, show_newest=False)
         state_labels = {
             "started": "Analyse",
+            "analysed": "Analyse en cours",
             "selected": "Sélection",
             "exported": "Export",
             "completed": "Terminé",

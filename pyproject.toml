@@ -26,6 +26,11 @@ bestshot = "bestshot.cli:app"
 bestshot-gui = "bestshot.desktop.app:main"
 
 [project.optional-dependencies]
+pool = [
+    "huggingface-hub>=0.24",
+    "torch>=2.6",
+    "transformers>=4.44,<6",
+]
 aesthetic = [
     "huggingface-hub>=0.24",
     "torch>=2.3",

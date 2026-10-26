@@ -50,7 +50,8 @@ class TechnicalScorer:
         """Retourne les scores normalisés pour l'aperçu RGB fourni."""
         grayscale = _to_grayscale(preview)
         sharpness = _linear_score(
-            float(cv2.Laplacian(grayscale, cv2.CV_64F).var()),
+            # Les seuils de variance sont exprimés sur l'échelle d'intensité 0..255.
+            float(cv2.Laplacian(grayscale * 255.0, cv2.CV_64F).var()),
             self._settings.sharpness_min_variance,
             self._settings.sharpness_good_variance,
         )

@@ -9,8 +9,8 @@ from bestshot.scoring.technical import TechnicalScorer, TechnicalScoringSettings
 
 def _settings() -> TechnicalScoringSettings:
     return TechnicalScoringSettings(
-        sharpness_min_variance=0.001,
-        sharpness_good_variance=0.05,
+        sharpness_min_variance=15.0,
+        sharpness_good_variance=200.0,
         exposure_target=0.5,
         exposure_max_deviation=0.25,
         burned_pixel_threshold=0.95,
@@ -49,6 +49,15 @@ def test_sharp_image_scores_higher_than_blurred_image() -> None:
     blurred_score = scorer.score(_preview(blurred_image))
 
     assert sharp_score.sharpness > blurred_score.sharpness
+
+
+def test_default_thresholds_distinguish_sharp_and_blurred_images() -> None:
+    from bestshot.infrastructure.config import load_technical_scoring_settings
+
+    scorer = TechnicalScorer(load_technical_scoring_settings())
+    assert scorer.score(_preview(_checkerboard())).sharpness == 1.0
+    blurred = cv2.GaussianBlur(_checkerboard(), (9, 9), 0)
+    assert scorer.score(_preview(blurred)).sharpness < 0.05
 
 
 def test_dark_and_overexposed_images_are_penalized_independently() -> None:
