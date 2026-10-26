@@ -31,6 +31,11 @@ exportées en JPEG pleine résolution dans `bestshot-candidates/`, à côté de 
 source. Elles correspondent uniquement au présampling temporel V2 : aucune analyse de
 scène, de visage ou de qualité esthétique n'est appliquée.
 
+Dans l'onglet **Analyse vidéo**, vous pouvez régler pour le prochain lot la cadence
+d'analyse, la durée de comparaison, le nombre d'images gardées par fenêtre, la résolution
+d'analyse et la qualité JPEG. Il n'y a pas de limite totale artificielle par vidéo : le
+nombre d'images produites varie avec sa durée et ces réglages.
+
 La ligne de commande reste disponible pour une vidéo :
 
 ```bash

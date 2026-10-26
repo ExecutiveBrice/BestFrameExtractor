@@ -18,6 +18,7 @@ from PySide6.QtWidgets import QApplication
 from bestshot.dataset.labels import FrameLabel
 from bestshot.dataset.repository import DatasetSettings, FrameRecord
 from bestshot.desktop.application import AnalysisSummary, VideoLibraryWindow
+from bestshot.sampling.temporal_sampler import PresamplingSettings
 from bestshot.services.candidate_labeling import CandidateLabelingItem
 from bestshot.services.embeddings import EmbeddingReport
 from bestshot.services.label_selection import LabelSelectionResult
@@ -30,7 +31,12 @@ def test_analysis_updates_are_delivered_in_the_ui_thread(tmp_path: Path) -> None
     worker_thread_ids: list[int] = []
     ui_thread_ids: list[int] = []
 
+    received_settings: list[PresamplingSettings] = []
+
     class Runner:
+        def __init__(self, settings: PresamplingSettings) -> None:
+            received_settings.append(settings)
+
         def run(self, video_path: Path) -> EmbeddingReport:
             del video_path
             worker_thread_ids.append(get_ident())
@@ -59,6 +65,7 @@ def test_analysis_updates_are_delivered_in_the_ui_thread(tmp_path: Path) -> None
 
     assert worker_thread_ids and worker_thread_ids[0] != main_thread_id
     assert ui_thread_ids == [main_thread_id]
+    assert received_settings == [PresamplingSettings(8.0, 1.0, 2, 640, 95)]
     assert "candidates exportées" in window._status.text()
     window._window.close()
 
@@ -68,7 +75,7 @@ def test_analysis_error_is_kept_visible_after_the_worker_finishes(tmp_path: Path
     assert application is not None
     window = VideoLibraryWindow(
         DatasetSettings(tmp_path / "dataset.sqlite", tmp_path / "previews"),
-        lambda: None,
+        lambda settings: None,
     )
 
     window._finish_analysis(
@@ -76,6 +83,43 @@ def test_analysis_error_is_kept_visible_after_the_worker_finishes(tmp_path: Path
     )
 
     assert "torchvision est introuvable" in window._status.text()
+    window._window.close()
+
+
+def test_analysis_uses_the_sampling_controls_for_the_next_batch(tmp_path: Path) -> None:
+    application = QApplication.instance() or QApplication([])
+    assert application is not None
+    received_settings: list[PresamplingSettings] = []
+
+    class Runner:
+        def __init__(self, settings: PresamplingSettings) -> None:
+            received_settings.append(settings)
+
+        def run(self, video_path: Path) -> EmbeddingReport:
+            del video_path
+            return EmbeddingReport("cpu", "test", 0, 0, 0.0)
+
+    window = VideoLibraryWindow(DatasetSettings(tmp_path / "dataset.sqlite", tmp_path / "previews"), Runner)
+    window._analysis_fps_input.setValue(12.5)
+    window._bucket_seconds_input.setValue(0.5)
+    window._keep_per_bucket_input.setValue(4)
+    window._analysis_width_input.setValue(1_280)
+    window._jpeg_quality_input.setValue(85)
+    window._set_videos((tmp_path / "clip.mp4",))
+    window._start_analysis()
+
+    event_loop = QEventLoop()
+
+    def stop_when_finished() -> None:
+        if window._analysis_thread is None:
+            event_loop.quit()
+            return
+        QTimer.singleShot(10, stop_when_finished)
+
+    QTimer.singleShot(10, stop_when_finished)
+    event_loop.exec()
+
+    assert received_settings == [PresamplingSettings(12.5, 0.5, 4, 1_280, 85)]
     window._window.close()
 
 
@@ -105,7 +149,7 @@ def test_learning_tab_reads_and_writes_labels_outside_the_ui_thread(tmp_path: Pa
 
     window = VideoLibraryWindow(
         DatasetSettings(tmp_path / "dataset.sqlite", tmp_path / "previews"),
-        lambda: None,
+        lambda settings: None,
         Service,
     )
     window._start_candidate_load(candidates_directory)
@@ -161,7 +205,7 @@ def test_ai_selection_tab_trains_and_exports_in_a_worker(tmp_path: Path) -> None
     video_path = tmp_path / "clip.mp4"
     window = Window(
         DatasetSettings(tmp_path / "dataset.sqlite", tmp_path / "previews"),
-        lambda: None,
+        lambda settings: None,
         ai_selection_service_factory=Service,
     )
     window._ai_selection_videos = (video_path,)

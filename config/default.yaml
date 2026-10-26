@@ -5,6 +5,8 @@ personal_pipeline:
     bucket_seconds: 1.0
     keep_per_bucket: 2
     analysis_max_width: 640
+    # Compression des JPEG exportés, sans redimensionner les frames source.
+    export_jpeg_quality: 95
 
 embedding_model:
   # Le téléchargement des poids est explicite ; les inférences sont strictement locales.

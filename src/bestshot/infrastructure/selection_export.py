@@ -26,6 +26,11 @@ class SelectedFrameExportError(RuntimeError):
 class PyAVSelectedFrameExporter:
     """Relit séquentiellement une vidéo et écrit uniquement les frames demandées."""
 
+    def __init__(self, jpeg_quality: int = 95) -> None:
+        if not 1 <= jpeg_quality <= 100:
+            raise ValueError("La qualité JPEG d'export doit être comprise entre 1 et 100.")
+        self._jpeg_quality = jpeg_quality
+
     def export(
         self,
         video_path: Path,
@@ -53,7 +58,7 @@ class PyAVSelectedFrameExporter:
                     if record is None:
                         continue
                     destination = selected_frame_path(destination_directory, video_path, record)
-                    _save_jpeg(decoded, destination)
+                    _save_jpeg(decoded, destination, self._jpeg_quality)
                     exported[frame_index] = destination
                     if len(exported) == len(requested):
                         break
@@ -78,12 +83,12 @@ def selected_frame_path(destination_directory: Path, video_path: Path, frame: Ex
     )
 
 
-def _save_jpeg(decoded: object, destination: Path) -> None:
+def _save_jpeg(decoded: object, destination: Path, quality: int) -> None:
     """Écrit atomiquement une image JPEG pleine résolution, hors de la base SQLite."""
     temporary = destination.with_name(f".{destination.name}.{uuid4().hex}.tmp")
     try:
         image = decoded.to_image()  # type: ignore[attr-defined]
-        image.save(temporary, format="JPEG", quality=95, optimize=True)
+        image.save(temporary, format="JPEG", quality=quality, optimize=True)
         os.replace(temporary, destination)
     except Exception as error:
         try:

@@ -80,6 +80,7 @@ personal_pipeline:
     bucket_seconds: 1.0
     keep_per_bucket: 2
     analysis_max_width: 640
+    export_jpeg_quality: 95
 
 embedding_model:
   repo_id: facebook/dinov2-small
@@ -96,3 +97,10 @@ dataset:
 
 Les tests couvrent le filtre temporel, le classement local par netteté, le cache
 d'embeddings, l'export des candidates et les mises à jour Qt depuis le thread UI.
+
+Dans l'onglet **Analyse vidéo**, ces cinq réglages peuvent être ajustés avant chaque
+traitement. Ils sont figés pour le lot en cours et ne modifient pas `default.yaml`. Il
+n'existe pas de maximum de candidates par vidéo : leur nombre dépend toujours de la durée,
+de la cadence d'analyse, de la durée des fenêtres et du nombre de frames décodables. La
+qualité JPEG concerne uniquement la compression des exports, qui restent à la résolution
+de la source.

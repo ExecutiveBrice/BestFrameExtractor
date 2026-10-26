@@ -16,6 +16,7 @@ def test_load_presampling_settings_reads_v2_defaults() -> None:
     assert settings.bucket_seconds == 1.0
     assert settings.keep_per_bucket == 2
     assert settings.analysis_max_width == 640
+    assert settings.export_jpeg_quality == 95
 
 
 def test_load_embedding_settings_reads_dinov2_defaults() -> None:

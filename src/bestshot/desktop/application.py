@@ -34,7 +34,11 @@ from bestshot.infrastructure.selection_export import (
 from bestshot.infrastructure.temporal_sampling import PyAVTemporalSamplingBackend
 from bestshot.sampling.candidate_generator import CandidateGenerationError, CandidateGenerator
 from bestshot.sampling.sharpness_ranker import SharpnessRanker
-from bestshot.sampling.temporal_sampler import TemporalSampler, TemporalSamplingError
+from bestshot.sampling.temporal_sampler import (
+    PresamplingSettings,
+    TemporalSampler,
+    TemporalSamplingError,
+)
 from bestshot.services.candidate_labeling import (
     CandidateLabelingError,
     CandidateLabelingItem,
@@ -106,11 +110,16 @@ def run_desktop_application() -> int:
     qt = _qt()
     try:
         dataset_settings = load_dataset_settings()
+        presampling_settings = load_presampling_settings()
     except ConfigurationError as error:
         raise DesktopApplicationError(str(error)) from error
 
     application = qt.QApplication.instance() or qt.QApplication([])
-    window = VideoLibraryWindow(dataset_settings, _create_embedding_runner)
+    window = VideoLibraryWindow(
+        dataset_settings,
+        _create_embedding_runner,
+        presampling_settings=presampling_settings,
+    )
     window.show()
     return application.exec()
 
@@ -130,14 +139,16 @@ class VideoLibraryWindow:
     def __init__(
         self,
         dataset_settings: DatasetSettings,
-        runner_factory: Callable[[], VideoEmbeddingRunner],
+        runner_factory: Callable[[PresamplingSettings], VideoEmbeddingRunner],
         labeling_service_factory: Callable[[], CandidateLabelingService] | None = None,
         ai_selection_service_factory: Callable[[], LabelDrivenSelectionService] | None = None,
+        presampling_settings: PresamplingSettings | None = None,
     ) -> None:
         qt = _qt()
         self._qt = qt
         self._dataset_settings = dataset_settings
         self._runner_factory = runner_factory
+        self._presampling_settings = presampling_settings or load_presampling_settings()
         self._labeling_service_factory = labeling_service_factory or _create_candidate_labeling_service
         self._ai_selection_service_factory = ai_selection_service_factory or _create_ai_selection_service
         self._videos: tuple[Path, ...] = ()
@@ -171,6 +182,8 @@ class VideoLibraryWindow:
         )
         introduction.setWordWrap(True)
         layout.addWidget(introduction)
+
+        self._create_presampling_controls(layout)
 
         folder_row = qt.QHBoxLayout()
         self._folder_path = qt.QLineEdit()
@@ -208,6 +221,74 @@ class VideoLibraryWindow:
     def show(self) -> None:
         self._window.resize(820, 600)
         self._window.show()
+
+    def _create_presampling_controls(self, layout: Any) -> None:
+        """Expose la densité réelle du présampling, sans quota par vidéo."""
+        settings_box = self._qt.QGroupBox("Réglages pour ce traitement")
+        form = self._qt.QFormLayout(settings_box)
+
+        self._analysis_fps_input = self._qt.QDoubleSpinBox()
+        self._analysis_fps_input.setRange(0.1, 1_000.0)
+        self._analysis_fps_input.setDecimals(2)
+        self._analysis_fps_input.setSingleStep(1.0)
+        self._analysis_fps_input.setValue(self._presampling_settings.analysis_fps)
+        self._analysis_fps_input.setToolTip("Nombre de frames examinées chaque seconde.")
+        form.addRow("Cadence d'analyse (images/s)", self._analysis_fps_input)
+
+        self._bucket_seconds_input = self._qt.QDoubleSpinBox()
+        self._bucket_seconds_input.setRange(0.01, 3_600.0)
+        self._bucket_seconds_input.setDecimals(2)
+        self._bucket_seconds_input.setSingleStep(0.25)
+        self._bucket_seconds_input.setValue(self._presampling_settings.bucket_seconds)
+        self._bucket_seconds_input.setToolTip(
+            "Durée des fenêtres dans lesquelles la netteté est comparée."
+        )
+        form.addRow("Fenêtre de comparaison (s)", self._bucket_seconds_input)
+
+        self._keep_per_bucket_input = self._qt.QSpinBox()
+        self._keep_per_bucket_input.setRange(1, 10_000)
+        self._keep_per_bucket_input.setValue(self._presampling_settings.keep_per_bucket)
+        self._keep_per_bucket_input.setToolTip(
+            "Nombre de meilleures frames gardées dans chaque fenêtre temporelle."
+        )
+        form.addRow("Images gardées par fenêtre", self._keep_per_bucket_input)
+
+        self._analysis_width_input = self._qt.QSpinBox()
+        self._analysis_width_input.setRange(1, 16_384)
+        self._analysis_width_input.setSingleStep(160)
+        self._analysis_width_input.setValue(self._presampling_settings.analysis_max_width)
+        self._analysis_width_input.setToolTip(
+            "Définition utilisée pour comparer la netteté et créer les aperçus."
+        )
+        form.addRow("Largeur d'analyse / aperçu (px)", self._analysis_width_input)
+
+        self._jpeg_quality_input = self._qt.QSpinBox()
+        self._jpeg_quality_input.setRange(1, 100)
+        self._jpeg_quality_input.setSuffix(" %")
+        self._jpeg_quality_input.setValue(self._presampling_settings.export_jpeg_quality)
+        self._jpeg_quality_input.setToolTip(
+            "Qualité de compression des JPEG exportés à pleine résolution."
+        )
+        form.addRow("Qualité JPEG exportée", self._jpeg_quality_input)
+
+        explanation = self._qt.QLabel(
+            "Aucun nombre maximal d'images n'est imposé par vidéo : le total dépend de sa durée, "
+            "de la cadence, des fenêtres et des frames réellement décodées. La largeur influence "
+            "l'analyse de netteté ; les exports restent à la résolution de la vidéo source."
+        )
+        explanation.setWordWrap(True)
+        form.addRow(explanation)
+        layout.addWidget(settings_box)
+
+    def _presampling_settings_from_controls(self) -> PresamplingSettings:
+        """Fige les paramètres affichés avant de les confier au worker d'analyse."""
+        return PresamplingSettings(
+            analysis_fps=self._analysis_fps_input.value(),
+            bucket_seconds=self._bucket_seconds_input.value(),
+            keep_per_bucket=self._keep_per_bucket_input.value(),
+            analysis_max_width=self._analysis_width_input.value(),
+            export_jpeg_quality=self._jpeg_quality_input.value(),
+        )
 
     def _create_learning_tab(self) -> Any:
         tab = self._qt.QWidget()
@@ -487,7 +568,11 @@ class VideoLibraryWindow:
         self._status.setText("Préparation de l'analyse locale…")
 
         self._analysis_thread = self._qt.QThread()
-        self._analysis_worker = _AnalysisWorker(self._videos, self._runner_factory)
+        self._analysis_worker = _AnalysisWorker(
+            self._videos,
+            self._runner_factory,
+            self._presampling_settings_from_controls(),
+        )
         self._analysis_worker.moveToThread(self._analysis_thread)
         self._analysis_thread.started.connect(self._analysis_worker.run)
         connection = self._qt.Qt.ConnectionType.QueuedConnection
@@ -533,6 +618,11 @@ class VideoLibraryWindow:
     def _set_controls(self, enabled: bool) -> None:
         self._choose_folder_button.setEnabled(enabled)
         self._analyse_button.setEnabled(enabled and bool(self._videos))
+        self._analysis_fps_input.setEnabled(enabled)
+        self._bucket_seconds_input.setEnabled(enabled)
+        self._keep_per_bucket_input.setEnabled(enabled)
+        self._analysis_width_input.setEnabled(enabled)
+        self._jpeg_quality_input.setEnabled(enabled)
 
     def _stop_analysis_thread(self) -> None:
         thread = self._analysis_thread
@@ -663,7 +753,8 @@ class _AnalysisWorker:
     def __new__(
         cls,
         video_paths: tuple[Path, ...],
-        runner_factory: Callable[[], VideoEmbeddingRunner],
+        runner_factory: Callable[[PresamplingSettings], VideoEmbeddingRunner],
+        presampling_settings: PresamplingSettings,
     ) -> Any:
         qt = _qt()
 
@@ -677,6 +768,7 @@ class _AnalysisWorker:
                 super().__init__()
                 self._video_paths = video_paths
                 self._runner_factory = runner_factory
+                self._presampling_settings = presampling_settings
 
             @qt.Slot()
             def run(self) -> None:
@@ -685,7 +777,7 @@ class _AnalysisWorker:
                 failure_messages: list[str] = []
                 total = len(self._video_paths)
                 try:
-                    runner = self._runner_factory()
+                    runner = self._runner_factory(self._presampling_settings)
                 except _ANALYSIS_ERRORS as error:
                     for position, path in enumerate(self._video_paths, start=1):
                         failed.append(path)
@@ -860,9 +952,8 @@ class _AISelectionWorker:
         return Worker()
 
 
-def _create_embedding_runner() -> VideoEmbeddingRunner:
+def _create_embedding_runner(presampling_settings: PresamplingSettings) -> VideoEmbeddingRunner:
     """Assemble le pipeline V2, utilisé exclusivement par le worker d'analyse."""
-    presampling_settings = load_presampling_settings()
     embedding_settings = load_embedding_settings()
     dataset_settings = load_dataset_settings()
     generator = CandidateGenerator(
@@ -878,7 +969,7 @@ def _create_embedding_runner() -> VideoEmbeddingRunner:
         presampling_settings.analysis_max_width,
         SQLiteDatasetRepository(dataset_settings.database_path),
         PreviewCache(dataset_settings.preview_cache_dir),
-        PyAVSelectedFrameExporter(),
+        PyAVSelectedFrameExporter(presampling_settings.export_jpeg_quality),
     )
 
 
@@ -923,14 +1014,18 @@ def _qt() -> Any:
         QAbstractItemView = QtWidgets.QAbstractItemView
         QFileDialog = QtWidgets.QFileDialog
         QHBoxLayout = QtWidgets.QHBoxLayout
+        QFormLayout = QtWidgets.QFormLayout
+        QGroupBox = QtWidgets.QGroupBox
         QLabel = QtWidgets.QLabel
         QLineEdit = QtWidgets.QLineEdit
         QListWidget = QtWidgets.QListWidget
         QMainWindow = QtWidgets.QMainWindow
         QMessageBox = QtWidgets.QMessageBox
         QProgressBar = QtWidgets.QProgressBar
+        QDoubleSpinBox = QtWidgets.QDoubleSpinBox
         QPixmap = QtGui.QPixmap
         QPushButton = QtWidgets.QPushButton
+        QSpinBox = QtWidgets.QSpinBox
         QTabWidget = QtWidgets.QTabWidget
         QThread = QtCore.QThread
         QVBoxLayout = QtWidgets.QVBoxLayout

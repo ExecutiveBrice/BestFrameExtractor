@@ -17,6 +17,7 @@ class PresamplingSettings:
     bucket_seconds: float
     keep_per_bucket: int
     analysis_max_width: int
+    export_jpeg_quality: int = 95
 
 
 @dataclass(frozen=True, slots=True)

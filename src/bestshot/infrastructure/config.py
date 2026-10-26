@@ -36,6 +36,7 @@ def load_presampling_settings(config_path: Path = DEFAULT_CONFIG_PATH) -> Presam
         bucket_seconds=_positive_float(presampling, "bucket_seconds"),
         keep_per_bucket=_positive_int(presampling, "keep_per_bucket"),
         analysis_max_width=_positive_int(presampling, "analysis_max_width"),
+        export_jpeg_quality=_jpeg_quality(presampling, "export_jpeg_quality"),
     )
 
 
@@ -167,6 +168,13 @@ def _positive_int(values: Mapping[str, object], key: str) -> int:
     if isinstance(value, int) and value > 0:
         return value
     raise ConfigurationError(f"Entier positif attendu pour {key}.")
+
+
+def _jpeg_quality(values: Mapping[str, object], key: str) -> int:
+    value = values.get(key)
+    if isinstance(value, int) and 1 <= value <= 100:
+        return value
+    raise ConfigurationError(f"Qualité JPEG [1, 100] attendue pour {key}.")
 
 
 def _non_negative_int(values: Mapping[str, object], key: str) -> int:
